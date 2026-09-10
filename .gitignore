@@ -1,0 +1,6 @@
+# images repo: 빌드 산출물·작업상태 제외
+.omc/
+**/npu-detector
+**/detector
+*.run
+*.lock

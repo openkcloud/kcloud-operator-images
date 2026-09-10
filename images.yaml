@@ -1,0 +1,41 @@
+# ============================================================
+# images.yaml: GHCR 로 공개 발행하는 이미지의 빌드 컨텍스트 매니페스트
+# 상세: .github/workflows/publish-image.yml 이 이 파일을 읽어 디렉터리·Dockerfile·
+#       기본 build-arg 를 정한다. 신규 이미지를 발행하려면 여기에 항목을 추가하고
+#       워크플로의 workflow_dispatch image 선택지에도 같은 이름을 넣는다.
+#       키가 곧 이미지 이름이다(ghcr.io/openkcloud/<키>:<태그>).
+#       build_args 값의 ${TAG} 는 발행 태그로 치환된다.
+# 생성일: 2026-09-09
+# ============================================================
+images:
+  kcloud-host-exec:
+    dir: kcloud-host-exec
+    # 태그 규약: vX.Y.Z
+  kcloud-node-manager:
+    dir: node-device-detector
+    # 태그 규약: X.Y.Z (v 접두사 없음)
+  nvidia-driver-ds:
+    dir: driver-installer/nvidia
+    # Dockerfile(구 경로)이 아니라 v17 이 실사용 빌드다.
+    dockerfile: Dockerfile.v17
+    # 태그 규약: vN
+  furiosa-driver-ds:
+    dir: driver-installer/furiosa
+    # 이미지가 자기 태그를 알아야 설치 마커를 판정할 수 있다.
+    build_args:
+      BUILD_VARIANT: "${TAG}"
+    # 태그 규약: vN
+  tenstorrent-driver-ds:
+    dir: driver-installer-tenstorrent
+    # 태그의 kmd 버전과 이 두 값을 함께 올린다(이미지와 커널 모듈 버전이 1:1).
+    build_args:
+      TT_KMD_VERSION: "2.8.0"
+      TT_KMD_GIT_TAG: "ttkmd-2.8.0"
+    # 태그 규약: <kmd>-vN (예: 2.8.0-v1)
+  kcloud-tt-device-plugin:
+    dir: tenstorrent-device-plugin
+    # 태그 규약: vX.Y.Z
+  furiosa-exporter:
+    dir: furiosa-exporter
+    # 빌드 단계가 벤더 apt 저장소에 접근하므로 러너에 인터넷이 필요하다.
+    # 태그 규약: X.Y.Z
