@@ -71,7 +71,7 @@ TT_KMD_GIT_TAG=ttkmd-2.9.0
 
 ### GHCR 패키지 공개 설정
 
-워크플로는 각 이미지에 `org.opencontainers.image.source` 라벨을 붙이고, GHCR 은 이 라벨로 패키지를 저장소에 연결합니다. 연결이 곧 공개는 아닙니다. 처음 발행된 패키지는 비공개이므로 GHCR 패키지 설정에서 공개로 바꿔야 operator 차트가 인증 없이 받을 수 있습니다.
+워크플로는 각 이미지에 `org.opencontainers.image.source` 라벨을 붙이고, GHCR 은 이 라벨로 패키지를 저장소에 연결합니다. 연결이 곧 공개는 아닙니다. 조직 설정에 따라 처음 발행된 패키지가 비공개일 수 있으므로, 익명 pull 이 거부되면 GHCR 패키지 설정에서 공개로 바꿉니다. openkcloud 조직은 공개로 발행됩니다.
 
 ## 로컬 빌드
 
