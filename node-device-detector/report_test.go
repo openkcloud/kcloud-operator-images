@@ -102,6 +102,64 @@ func TestBuildDevices_NeedsReboot_LegacyMarkerPath(t *testing.T) {
 	}
 }
 
+// Task 2: 로드==디스크면 스테일 재부팅 마커를 무시한다(A3).
+// needs-reboot 마커는 install Job 재실행만 지워 Idle 에서 로드==디스크여도 래치돼
+// 스테일 마커 하나가 다음 사이클의 재부팅 예산 1을 소모했다. 디스크 버전(Task 1)과
+// 로드 버전이 같으면 needsReboot 를 싣지 않는다. 디스크 미상이면 기존대로 마커를 존중.
+func TestBuildDevices_NeedsRebootSuppressedWhenLoadedEqualsDisk(t *testing.T) {
+	tmp := t.TempDir()
+	old := hostPrefix
+	hostPrefix = tmp
+	defer func() { hostPrefix = old }()
+	if err := os.MkdirAll(filepath.Join(tmp, "var/lib/kcloud-operator"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "var/lib/kcloud-operator/needs-reboot"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Case 1: 로드==디스크(ver="580.178.04", onDiskVer="580.178.04") + 마커 존재
+	// → needsReboot 키 미생성(마커는 스테일)
+	snap := &Snapshot{Devices: []Detected{
+		{vendor: "nvidia", model: "generic", count: 1, loaded: true, ver: "580.178.04", onDiskVer: "580.178.04"},
+	}}
+	devs := buildDevices(snap)
+	if _, ok := devs[0]["needsReboot"]; ok {
+		t.Errorf("loaded==disk 인데 needsReboot 키가 있음: %+v", devs[0])
+	}
+
+	// Case 2: 로드!=디스크(ver="595.91.07", onDiskVer="580.178.04") + 마커 존재
+	// → needsReboot==true(마커 존중, 진짜 미스매치)
+	snap = &Snapshot{Devices: []Detected{
+		{vendor: "nvidia", model: "generic", count: 1, loaded: true, ver: "595.91.07", onDiskVer: "580.178.04"},
+	}}
+	devs = buildDevices(snap)
+	if devs[0]["needsReboot"] != true {
+		t.Errorf("loaded!=disk 인데 needsReboot 가 설정 안 됨: got %v, want true", devs[0]["needsReboot"])
+	}
+
+	// Case 3: 디스크 미상(onDiskVer="") + 마커 존재 → needsReboot==true(마커 존중, 기존 동작)
+	snap = &Snapshot{Devices: []Detected{
+		{vendor: "nvidia", model: "generic", count: 1, loaded: true, ver: "595.91.07", onDiskVer: ""},
+	}}
+	devs = buildDevices(snap)
+	if devs[0]["needsReboot"] != true {
+		t.Errorf("onDiskVer 미상인데 needsReboot 가 설정 안 됨: got %v, want true", devs[0]["needsReboot"])
+	}
+
+	// Case 4: 양쪽 공백(ver="", onDiskVer="", loaded=false) + 마커 존재 → needsReboot==true
+	// 드라이버 미로드 + .run 설치(deb 패키지 없음)의 경우. 공백 가드가 없으면
+	// loadedEqualsDisk = ("" == "") → true → needsReboot 를 잘못 억제한다.
+	// 이 경우 재부팅이 필요하므로 마커를 반드시 존중해야 한다.
+	snap = &Snapshot{Devices: []Detected{
+		{vendor: "nvidia", model: "generic", count: 1, loaded: false, ver: "", onDiskVer: ""},
+	}}
+	devs = buildDevices(snap)
+	if devs[0]["needsReboot"] != true {
+		t.Errorf("드라이버 미로드인데 needsReboot 가 설정 안 됨: got %v, want true", devs[0]["needsReboot"])
+	}
+}
+
 // migLgipOutput 은 NVIDIA device 에만 부착, 값은 Snapshot.MigLgip 그대로(Task 11b).
 func TestBuildDevices_MigLgipOutput(t *testing.T) {
 	snap := &Snapshot{
@@ -492,9 +550,34 @@ func TestReportPreservesObservedMig(t *testing.T) {
 	}
 }
 
+// TestBuildDevices_OnDiskVersion: NVIDIA onDiskVer 는 NDR 에 방출되고, 다른 벤더는 키를 만들지 않는다.
+func TestBuildDevices_OnDiskVersion(t *testing.T) {
+	snap := &Snapshot{Devices: []Detected{
+		{vendor: "nvidia", model: "generic", count: 1, loaded: true, ver: "595.91.07", detail: "NVRM 595.91.07", onDiskVer: "580.178.04"},
+		{vendor: "furiosa", model: "warboy", count: 1, loaded: true, ver: "1.9.8-3", detail: "driver=1.9.8-3", onDiskVer: ""},
+	}}
+	devs := buildDevices(snap)
+	if len(devs) != 2 {
+		t.Fatalf("expected 2 devices, got %d", len(devs))
+	}
+
+	// NVIDIA onDiskVer 방출
+	if devs[0]["vendor"] != "nvidia" {
+		t.Fatalf("expected nvidia first, got %+v", devs[0])
+	}
+	if devs[0]["driverVersionOnDisk"] != "580.178.04" {
+		t.Errorf("nvidia onDiskVer = %v, want 580.178.04", devs[0]["driverVersionOnDisk"])
+	}
+
+	// Furiosa 는 키 없음(값이 빈 문자열이므로 조건부 생략)
+	if _, ok := devs[1]["driverVersionOnDisk"]; ok {
+		t.Errorf("furiosa 에 driverVersionOnDisk 키가 있음(NVIDIA 한정이어야): %+v", devs[1])
+	}
+}
+
 // TestHandCopiedStructFieldCounts 는 손복사 매핑의 원본 구조체 필드 수를 못박는다.
 //
-// buildValidation 은 ValidationStep 4필드를, buildDevices 는 Detected 6필드를 손으로
+// buildValidation 은 ValidationStep 4필드를, buildDevices 는 Detected 7필드를 손으로
 // map 에 옮긴다. 필드를 늘리고 매핑을 안 고치면 그 값은 NDR 에 실리지 않는데, 이 트랙에서
 // NotApplicable 누락이 단위시험·리뷰를 전부 통과하고 라이브에서만 드러났다. 이 시험은
 // 필드 수가 바뀌는 순간 빨개져 매핑을 함께 고치도록 한다.
@@ -505,7 +588,7 @@ func TestHandCopiedStructFieldCounts(t *testing.T) {
 		fix  string
 	}{
 		{reflect.TypeOf(ValidationStep{}), 4, "buildValidation(report.go)"},
-		{reflect.TypeOf(Detected{}), 6, "buildDevices 의 newBase(report.go)"},
+		{reflect.TypeOf(Detected{}), 7, "buildDevices 의 newBase(report.go)"},
 	} {
 		if got := tc.typ.NumField(); got != tc.want {
 			t.Errorf("%s 필드 수가 %d → %d 로 바뀌었다. 필드를 추가했으면 %s 도 고쳐라 "+

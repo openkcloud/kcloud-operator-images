@@ -23,6 +23,8 @@ on:
           - tenstorrent-driver-ds
           - kcloud-tt-device-plugin
           - furiosa-exporter
+          - generic-device-plugin
+          - generic-dra-driver
       tag:
         description: "이미지 태그 (규약은 images.yaml 주석 참조)"
         required: true

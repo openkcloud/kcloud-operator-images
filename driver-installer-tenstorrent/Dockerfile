@@ -9,8 +9,8 @@ FROM ubuntu:22.04
 # tt-kmd upstream 태그(ttkmd-<ver>)와 그에 대응하는 semver 버전.
 #   TT_KMD_GIT_TAG : git clone 대상 태그 (예: ttkmd-2.8.0)
 #   TT_KMD_VERSION : DKMS PACKAGE_VERSION / 이미지 라벨 (예: 2.8.0)
-ARG TT_KMD_GIT_TAG="ttkmd-2.8.0"
-ARG TT_KMD_VERSION="2.8.0"
+ARG TT_KMD_GIT_TAG="ttkmd-2.11.0"
+ARG TT_KMD_VERSION="2.11.0"
 
 ENV DEBIAN_FRONTEND=noninteractive
 # 런타임에서 entrypoint 가 사용할 권위 버전 (baked 소스와 1:1).

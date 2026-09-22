@@ -531,6 +531,7 @@ var (
 	// 2-component 이상 허용 — /sys/module/nvidia/version 은 "595.84" 처럼 2-component 로만
 	// 적히므로 3-component 강제 패턴으로는 영영 안 잡힌다.
 	reAnyVer           = regexp.MustCompile(`([0-9]+(?:\.[0-9]+)+)`)
+	reNvidiaDriverPkg  = regexp.MustCompile(`^nvidia-driver-[0-9]+(-server)?(-open)?$`)
 	furiosaDriverNames = []string{"npu-mgmt", "npu_mgmt", "npu-pdma", "npu_pdma"}
 	furiosaModuleNames = []string{"npu_mgmt", "npu_pdma"}
 )
@@ -689,6 +690,41 @@ func furiosaPkgSummaryFromStatus() (driverVer string, detail string) {
 	}
 	detail = strings.Join(parts, "; ")
 	return
+}
+
+// nvidiaOnDiskVersion 는 설치된(디스크) nvidia 드라이버 패키지 버전을 dpkg status 에서 뽑는다.
+// 디스크 버전 = 재부팅 후 로드될 버전이므로 로드된 모듈 버전(/proc)과 다르면 대역외 드리프트다
+// (2026-09-17 사고 형태). 반환은 숫자형(예 "580.178.04"). 파싱 불가·미설치·.run 설치면 "".
+func nvidiaOnDiskVersion() string {
+	data, err := os.ReadFile(H(hostVarDpkgStatus))
+	if err != nil {
+		return ""
+	}
+	var pkg, ver, status string
+	var found string
+	flush := func() {
+		if found == "" && reNvidiaDriverPkg.MatchString(pkg) && strings.Contains(status, "ok installed") {
+			if m := reAnyVer.FindStringSubmatch(ver); len(m) == 2 {
+				found = m[1]
+			}
+		}
+		pkg, ver, status = "", "", ""
+	}
+	for _, ln := range strings.Split(string(data), "\n") {
+		switch {
+		case strings.HasPrefix(ln, "Package: "):
+			flush()
+			pkg = strings.TrimSpace(strings.TrimPrefix(ln, "Package: "))
+		case strings.HasPrefix(ln, "Version: "):
+			ver = strings.TrimSpace(strings.TrimPrefix(ln, "Version: "))
+		case strings.HasPrefix(ln, "Status: "):
+			status = strings.TrimSpace(strings.TrimPrefix(ln, "Status: "))
+		case ln == "":
+			flush()
+		}
+	}
+	flush()
+	return found
 }
 
 func furiosaShortVersion() (short, detail string) {
@@ -1183,12 +1219,13 @@ func nvidiaDriverLoaded() bool {
 /* ---------- 공통 디텍트 ---------- */
 
 type Detected struct {
-	vendor string
-	model  string
-	count  int
-	loaded bool
-	ver    string // short
-	detail string // normalized single-line detail
+	vendor    string
+	model     string
+	count     int
+	loaded    bool
+	ver       string // short
+	detail    string // normalized single-line detail
+	onDiskVer string // 설치된 nvidia 드라이버 패키지 버전(디스크 = 재부팅 후 로드될 버전). nvidia 만.
 }
 
 func detect() (out []Detected) {
@@ -1267,6 +1304,7 @@ func detect() (out []Detected) {
 			vendor: "nvidia", model: "generic",
 			count: ncnt, loaded: nLoaded,
 			ver: short, detail: det,
+			onDiskVer: nvidiaOnDiskVersion(),
 		})
 	}
 	return

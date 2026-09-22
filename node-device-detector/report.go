@@ -47,8 +47,15 @@ func buildDevices(snap *Snapshot) []map[string]any {
 				// (self-driver / vfio-pci / mixed / none).
 				"driverBinding": deviceDriverBinding(d),
 			}
+			// onDiskVer 는 값 있을 때만 기록(false 는 생략 → 기존 NDR 과 바이트 동등, 회귀 0).
+			if d.onDiskVer != "" {
+				dev["driverVersionOnDisk"] = d.onDiskVer
+			}
 			// needsReboot 는 true 일 때만 기록(false 는 생략 → 기존 NDR 과 바이트 동등, 회귀 0).
-			if needsRebootMarker && strings.EqualFold(d.vendor, "nvidia") {
+			// 로드==디스크(둘 다 알려졌고 같음)면 마커는 스테일 — install 없이 안 지워지는 마커가
+			// 재부팅 예산을 갉지 않도록 무시한다(A3). 디스크 미상이면 판단 못 하므로 마커를 존중.
+			loadedEqualsDisk := d.ver != "" && d.onDiskVer != "" && d.ver == d.onDiskVer
+			if needsRebootMarker && strings.EqualFold(d.vendor, "nvidia") && !loadedEqualsDisk {
 				dev["needsReboot"] = true
 			}
 			return dev

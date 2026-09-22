@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -319,5 +320,67 @@ func TestNvrmRegexMatchesOpenKernelModule(t *testing.T) {
 				t.Errorf("reNvrmVer = %q, want %q", m[1], tc.want)
 			}
 		})
+	}
+}
+
+// TestNvidiaOnDiskVersion: dpkg status 에서 nvidia-driver-* 설치 버전을 파싱한다.
+// 모든 실제 우분투 변종(기본/open/server/server-open)을 매칭하고,
+// assistant 와 furiosa 같은 비드라이버 패키지는 무시한다.
+func TestNvidiaOnDiskVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		pkgName string
+		pkgVer  string
+		wantVer string
+	}{
+		{"basic", "nvidia-driver-580", "580.76.04-1ubuntu1", "580.76.04"},
+		{"open", "nvidia-driver-580-open", "580.178.04-0ubuntu1", "580.178.04"},
+		{"server", "nvidia-driver-580-server", "580.09.14-1ubuntu1", "580.09.14"},
+		{"server-open", "nvidia-driver-535-server-open", "535.213.04-2ubuntu1", "535.213.04"},
+		{"assistant-excluded", "nvidia-driver-assistant", "1.0.0-1ubuntu1", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			old := hostPrefix
+			hostPrefix = tmp
+			t.Cleanup(func() { hostPrefix = old })
+
+			dpkgStatus := fmt.Sprintf(`Package: %s
+Version: %s
+Status: install ok installed
+
+Package: furiosa-libnux
+Version: 1.9.8-2ubuntu1
+Status: install ok installed
+
+`, tc.pkgName, tc.pkgVer)
+
+			dir := filepath.Join(tmp, "var/lib/dpkg")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "status"), []byte(dpkgStatus), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			got := nvidiaOnDiskVersion()
+			if got != tc.wantVer {
+				t.Errorf("nvidiaOnDiskVersion() = %q, want %q", got, tc.wantVer)
+			}
+		})
+	}
+}
+
+// TestNvidiaOnDiskVersion_None: dpkg status 가 없으면 빈 문자열을 반환한다.
+func TestNvidiaOnDiskVersion_None(t *testing.T) {
+	tmp := t.TempDir()
+	old := hostPrefix
+	hostPrefix = tmp
+	t.Cleanup(func() { hostPrefix = old })
+
+	// dpkg status 파일을 만들지 않음
+	got := nvidiaOnDiskVersion()
+	if got != "" {
+		t.Errorf("nvidiaOnDiskVersion() = %q, want empty string", got)
 	}
 }

@@ -29,8 +29,8 @@ images:
     dir: driver-installer-tenstorrent
     # 태그의 kmd 버전과 이 두 값을 함께 올린다(이미지와 커널 모듈 버전이 1:1).
     build_args:
-      TT_KMD_VERSION: "2.8.0"
-      TT_KMD_GIT_TAG: "ttkmd-2.8.0"
+      TT_KMD_VERSION: "2.11.0"
+      TT_KMD_GIT_TAG: "ttkmd-2.11.0"
     # 태그 규약: <kmd>-vN (예: 2.8.0-v1)
   kcloud-tt-device-plugin:
     dir: tenstorrent-device-plugin
@@ -39,3 +39,13 @@ images:
     dir: furiosa-exporter
     # 빌드 단계가 벤더 apt 저장소에 접근하므로 러너에 인터넷이 필요하다.
     # 태그 규약: X.Y.Z
+  generic-device-plugin:
+    dir: generic-device-plugin
+    # descriptor auto-apply 가 만드는 device-plugin DaemonSet 이미지
+    #   (deploy/helm/values.yaml generatedBackend.devicePlugin 이 참조).
+    # 태그 규약: vN (values.yaml 기본 v3 — sharing replicas 를 읽으려면 v3 이상)
+  generic-dra-driver:
+    dir: generic-dra-driver
+    # descriptor auto-apply 가 만드는 DRA driver DaemonSet 이미지
+    #   (deploy/helm/values.yaml generatedBackend.draDriver 이 참조).
+    # 태그 규약: vN (values.yaml 기본 v2 — sharing 과 무관)
