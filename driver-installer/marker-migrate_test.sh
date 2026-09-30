@@ -16,7 +16,7 @@ FAILED=0
 CANON="${HERE}/furiosa/marker-migrate.sh"
 COPIES=(
   "${HERE}/nvidia/marker-migrate.sh"
-  "${ROOT}/driver-installer-tenstorrent/marker-migrate.sh"
+  "${HERE}/tenstorrent/marker-migrate.sh"
 )
 
 check() {

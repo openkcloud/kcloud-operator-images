@@ -3,8 +3,9 @@
 # entrypoint.sh: Tenstorrent tt-kmd 드라이버 설치 (DaemonSet + install Job 겸용)
 # 상세: 이미지에 baked 된 tt-kmd 소스(air-gap)를 DKMS 로 빌드/설치 → modprobe →
 #       RUN_MODE=job 이면 self-check 후 exit 0, daemonset 이면 상시 헬스 루프.
+#       노드 커널용 prebuilt .ko 가 이미지에 있으면 DKMS 없이 그 모듈을 설치한다.
 #       안전장치: ALLOW_DOWNGRADE / VERSION_SOURCE=Host / idempotent skip.
-# 생성일: 2026-04-22 | 수정일: 2026-09-09
+# 생성일: 2026-04-22 | 수정일: 2026-09-22
 # ============================================================
 set -euo pipefail
 [[ "${DEBUG:-0}" == "1" ]] && set -x
@@ -51,8 +52,16 @@ tt_device_present() {
   ns "ls /dev/tenstorrent/ >/dev/null 2>&1" && return 0 || return 1
 }
 
-# 현재 로드/설치된 tenstorrent DKMS 버전(installed) 반환. 없으면 빈 문자열.
+# 현재 로드/설치된 tenstorrent 버전(installed) 반환. 없으면 빈 문자열.
+# prebuilt 설치는 DKMS 기록을 남기지 않으므로 sysfs(/sys/module/tenstorrent/version)를
+# 먼저 읽고, 값이 없으면 기존 dkms status 파싱으로 대체한다.
 current_tt_version() {
+  local v=""
+  v="$(ns "cat /sys/module/tenstorrent/version 2>/dev/null || true" 2>/dev/null | tr -d ' ')" || true
+  if [[ -n "$v" ]]; then
+    echo "$v"
+    return 0
+  fi
   ns "dkms status tenstorrent 2>/dev/null | grep -m1 installed | sed -E 's#tenstorrent[/,] *([0-9][^,]*).*#\\1#' | tr -d ' '" 2>/dev/null || true
 }
 
@@ -99,6 +108,34 @@ unload_old() {
 install_tt_dkms() {
   local ver="$1" kver
   kver=$(ns "uname -r")
+
+  # prebuilt 분기: 이미지에 이 커널용 .ko 가 함께 구워져 있으면 DKMS 빌드 없이 설치한다.
+  # install Job 은 host /lib/modules 를 컨테이너 /lib/modules 로 마운트하므로
+  # (internal/driverjob/job.go 의 host-modules VolumeMount), 컨테이너에서 그 경로에 쓰면
+  # host 의 /lib/modules 에 그대로 반영된다. depmod·modprobe 는 host 네임스페이스에서 수행한다.
+  local host_modules_root="/lib/modules"   # host /lib/modules 의 컨테이너 마운트 지점(job.go 와 일치)
+  local prebuilt_ko="/opt/tt-kmd-ko/${kver}/tenstorrent.ko"
+  if [[ -f "${prebuilt_ko}" ]]; then
+    local prebuilt_vermagic
+    prebuilt_vermagic="$(cat "/opt/tt-kmd-ko/${kver}/vermagic" 2>/dev/null || true)"
+    log_info "prebuilt module found for ${kver}: ${prebuilt_vermagic}"
+    install -D -m 0644 "${prebuilt_ko}" "${host_modules_root}/${kver}/updates/dkms/tenstorrent.ko" || {
+      log_error "prebuilt module copy failed for ${kver}"
+      return 1
+    }
+    ns "depmod -a ${kver}" || {
+      log_error "depmod failed for ${kver}"
+      return 1
+    }
+    if ! ns "modprobe tenstorrent"; then
+      log_error "prebuilt modprobe 실패 (vermagic 불일치 또는 Secure Boot 서명 거부 가능: ${prebuilt_vermagic})"
+      ns "dmesg 2>/dev/null | grep -i tenstorrent | tail -20" || true
+      return 1
+    fi
+    log_info "prebuilt module for ${kver} installed (dkms skipped)"
+    return 0
+  fi
+
   local src_host="/usr/src/tenstorrent-${ver}"   # host /usr/src (bind-mount) — DKMS 기본 sourcetree
   local src_baked="/opt/tt-kmd-src/${ver}"        # 이미지 baked (host /usr/src 마운트에 가려지지 않는 경로)
 

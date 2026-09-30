@@ -260,7 +260,7 @@ func TestBuildVendorSteps_ExcludedReasonComesFromLabel(t *testing.T) {
 }
 
 // TestValidate_ExcludedReasonThreadsThroughFromEntryPoint 는 Validate() 진입점부터
-// 사유가 벤더 step 까지 실제로 전달되는지 본다 — 단위 함수만 보면 배선 누락을 놓친다.
+// 사유가 벤더 step 까지 실제로 전달되는지 본다 — 단위 함수만 보면 연결 누락을 놓친다.
 func TestValidate_ExcludedReasonThreadsThroughFromEntryPoint(t *testing.T) {
 	snap := &Snapshot{
 		Node:    "k8s-worker9",
@@ -274,7 +274,7 @@ func TestValidate_ExcludedReasonThreadsThroughFromEntryPoint(t *testing.T) {
 }
 
 // TestValidate_ExcludedThreadsThroughToVendorSteps 는 Validate() 진입점부터 excluded
-// 가 벤더 step 까지 실제로 전달되는지 본다(단위 함수만 보면 배선 누락을 놓친다).
+// 가 벤더 step 까지 실제로 전달되는지 본다(단위 함수만 보면 연결 누락을 놓친다).
 func TestValidate_ExcludedThreadsThroughToVendorSteps(t *testing.T) {
 	snap := &Snapshot{
 		Node:    "k8s-master",

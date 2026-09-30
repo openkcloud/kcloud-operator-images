@@ -9,7 +9,12 @@
 #       헬스 장치·APT 저장소·인증)만 달랐다. 그 값은 아래 모델 표 한 곳에만 둔다.
 #       안전장치(NVIDIA a/b/c 이식): (a)전량 vfio-pci passthrough 시 설치 보류+idle,
 #       (b)기존 설치가 desired 보다 최신이면 다운그레이드 방지, (c)VERSION_SOURCE=Host 시 호스트 버전 존중
-# 생성일: 2026-09-09
+#       사전 컴파일 가드(fail-closed): 동봉 .ko 가 있으면 (I-2)이미지 태그 버전==정책 DRIVER_VERSION
+#       확인 후에만 진행, (I-1)커널 헤더 설치 생략(헤더 없는 호스트의 postinst DKMS 빌드 차단),
+#       설치 후 dkms status 로 실제 빌드 여부를 정직하게 로그.
+#       사전 컴파일 설치 로그는 DKMS 빌드 여부를 단정하지 않는다. 그 판정은 apt 설치 블록의
+#       dkms status 확인이 한다.
+# 생성일: 2026-09-09 | 수정일: 2026-09-24
 # ============================================================
 set -euo pipefail
 
@@ -27,6 +32,84 @@ RUN_MODE="${RUN_MODE:-daemonset}"
 
 # ----- helpers -----
 ns() { nsenter --target 1 --mount --uts --ipc --net --pid -- bash -lc "$*"; }
+
+# ----- 사전 컴파일(prebuilt) 모듈 -----
+# 이미지에 이 variant·커널용 .ko 가 함께 구워져 있으면 DKMS 빌드 없이 그 모듈을 설치한다.
+# build-precompiled 로 구운 이미지만 ${PREBUILT_ROOT}/<variant>/<kernel>/ 아래에 .ko 와
+# vermagic 파일을 담는다. 시험(prebuilt-ko_test.sh)이 select_prebuilt_dir 만 source 로 불러
+# 검사할 수 있게 아래 ENTRYPOINT_LIB_ONLY 가드로 함수 정의까지만 로드한다.
+PREBUILT_ROOT="${PREBUILT_ROOT:-/opt/furiosa-ko}"
+
+# select_prebuilt_dir <variant> <kernel>: 동봉된 그 variant·커널용 디렉터리에 .ko 가 있으면
+#   경로를 출력하고 0, 없으면 아무것도 출력하지 않고 비0 을 반환한다.
+select_prebuilt_dir() {
+  local d="${PREBUILT_ROOT}/$1/$2" f
+  [ -d "$d" ] || return 1
+  for f in "$d"/*.ko; do
+    [ -e "$f" ] && { echo "$d"; return 0; }
+  done
+  return 1
+}
+
+# install_prebuilt_modules <variant> <kernel> <dir>: 동봉된 .ko 를 host module tree
+#   (/lib/modules/<kernel>/updates/dkms)로 설치하고 depmod 후 MODULES 순서로 modprobe 한다.
+#   저장된 vermagic 이 실행 커널로 시작하지 않으면(빌드 커널 불일치) 설치를 거부한다.
+#   .ko 는 컨테이너 안 파일이므로 기존 apt 키 복사와 같은 방식(ns 'cat >host' < file)으로
+#   호스트 네임스페이스에 쓴다. 각 단계 fail-closed. 성공 0, 실패 1.
+install_prebuilt_modules() {
+  local variant="$1" kver="$2" dir="$3" vermagic ko base mod
+  vermagic="$(cat "${dir}/vermagic" 2>/dev/null || true)"
+  case "${vermagic}" in
+    "${kver} "*|"${kver}") ;;
+    *)
+      echo "[ERR] prebuilt vermagic '${vermagic}' 가 실행 커널 ${kver} 로 시작하지 않는다 — 설치 거부" >&2
+      return 1
+      ;;
+  esac
+  echo "[INFO] prebuilt module found for ${kver} (${variant}): ${vermagic}"
+  for ko in "${dir}"/*.ko; do
+    base="$(basename "${ko}")"
+    ns "mkdir -p /lib/modules/${kver}/updates/dkms && cat >/lib/modules/${kver}/updates/dkms/${base} && chmod 0644 /lib/modules/${kver}/updates/dkms/${base}" < "${ko}" \
+      || { echo "[ERR] prebuilt ${base} 설치 실패 → host /lib/modules/${kver}/updates/dkms" >&2; return 1; }
+  done
+  ns "depmod -a ${kver}" || { echo "[ERR] depmod 실패 (${kver})" >&2; return 1; }
+  for mod in ${MODULES}; do
+    ns "modprobe ${mod}" \
+      || { echo "[ERR] prebuilt modprobe ${mod} 실패 (vermagic 불일치 또는 Secure Boot 서명 거부 가능)" >&2; return 1; }
+  done
+  ns "lsmod | grep -q ${HEALTH_MODULE}" \
+    || { echo "[ERR] ${HEALTH_MODULE} 모듈이 로드되지 않음" >&2; return 1; }
+  echo "[INFO] prebuilt module for ${kver} installed (동봉 .ko 로 덮어씀)"
+  return 0
+}
+
+# furiosa_pkg_version_from_tag <version.txt 태그> <variant>: 이미지 태그에서 패키지 버전 접두를
+#   출력한다. 태그 규약은 "<pkgVersion>-<variant>-k<kernel>-vN" 이라 "-<variant>-k" 앞부분만 남긴다.
+#   "2026.3.1-rngd-k6.8.0-138-generic-v1" + variant "rngd" → "2026.3.1". 규약과 안 맞으면 원본 그대로.
+furiosa_pkg_version_from_tag() {
+  local tag="$1" variant="$2"
+  printf '%s\n' "${tag%%-"${variant}"-k*}"
+}
+
+# furiosa_prebuilt_version_ok <version.txt 태그> <variant> <정책DRIVER_VERSION>: 버전 결합 판정(I-2).
+#   태그의 패키지 버전 접두가 정책 DRIVER_VERSION 과 같으면 0. 다르면 두 값을 찍고 1(fail-closed).
+#   .ko 에 MODULE_VERSION 이 없어 런타임 탐지가 불가하므로, 정책이 2026.3.0 인데 이미지가 2026.3.1
+#   .ko 를 조용히 덮어쓰는 것을 여기서 막는다. 정책 버전이 비면 결합 대상이 아니므로 통과한다.
+furiosa_prebuilt_version_ok() {
+  local tag="$1" variant="$2" want="$3" pfx
+  pfx="$(furiosa_pkg_version_from_tag "${tag}" "${variant}")"
+  [ -n "${want}" ] || return 0
+  if [ "${pfx}" != "${want}" ]; then
+    echo "[ERR] prebuilt 버전 결합 실패: 이미지 태그 버전='${pfx}', 정책 DRIVER_VERSION='${want}' — 불일치, 설치 거부" >&2
+    return 1
+  fi
+  return 0
+}
+
+# 시험 전용 진입점: 함수 정의만 필요할 때 여기서 멈춘다(아래 marker-migrate source·main 미실행).
+if [ "${ENTRYPOINT_LIB_ONLY:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 # 마커 디렉터리 개명 이관(npu-operator → kcloud-operator). 1회 수행되고 멱등이다.
 # 아래 어떤 MARKER_DIR 사용보다 먼저 와야 한다.
@@ -347,6 +430,18 @@ case "${ACTION}" in
     ;;
 esac
 
+# --- 버전 결합 가드 (I-2, fail-closed) ---
+# 이 variant·커널용 prebuilt .ko 가 동봉돼 있으면, 이미지 태그의 패키지 버전과 정책 DRIVER_VERSION 이
+# 같은지 apt 작업 전에 확인한다. 다르면 apt 는 정책 버전 userspace 를 깔고 prebuilt 가 다른 버전 .ko 로
+# 조용히 덮어써 불일치가 된다(모듈에 MODULE_VERSION 이 없어 런타임 탐지 불가). 어긋나면 거부한다.
+if select_prebuilt_dir "${MODEL}" "${KVER}" >/dev/null 2>&1; then
+  PREBUILT_TAG="$(cat /opt/furiosa/version.txt 2>/dev/null || true)"
+  furiosa_prebuilt_version_ok "${PREBUILT_TAG}" "${MODEL}" "${DRIVER_VERSION:-}" || {
+    echo "[ERR] 사전 컴파일 버전 결합 실패 (${MODEL}/${KVER}, 태그='${PREBUILT_TAG}') — 설치 거부"
+    exit 1
+  }
+fi
+
 if [[ "${SKIP_INSTALL}" -eq 0 ]]; then
   TMPDIR="$(mktemp -d)"
   trap 'rm -rf "$TMPDIR"' EXIT
@@ -360,9 +455,16 @@ if [[ "${SKIP_INSTALL}" -eq 0 ]]; then
   ns 'apt-get update'
 
   # 커널 빌드 의존을 드라이버보다 먼저 깐다. 드라이버 postinst 의 DKMS 빌드가 헤더를 요구한다.
-  echo "[INFO] 호스트 커널 빌드 의존 패키지 설치 (kernel=${KVER})..."
-  ns "DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential linux-modules-extra-${KVER} linux-headers-${KVER}" \
-    || echo "[WARN] 커널 빌드 의존 설치 실패 — pre-built .ko 인 경우 무시 가능"
+  # 단, 이 variant·커널용 prebuilt .ko 가 동봉돼 있으면 헤더를 깔지 않는다(I-1). 헤더가 없는 호스트는
+  # 드라이버 postinst 의 DKMS AUTOINSTALL 이 빌드를 건너뛰므로, 없애려던 노드 빌드가 사라지고 동봉
+  # .ko 만 남는다. 헤더가 이미 있는 호스트는 postinst 가 여전히 컴파일하며, 아래 정직 로그로 드러난다.
+  if select_prebuilt_dir "${MODEL}" "${KVER}" >/dev/null 2>&1; then
+    echo "[INFO] prebuilt .ko 동봉(${MODEL}/${KVER}) — 커널 빌드 의존(헤더) 설치 생략(DKMS 빌드 차단)"
+  else
+    echo "[INFO] 호스트 커널 빌드 의존 패키지 설치 (kernel=${KVER})..."
+    ns "DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential linux-modules-extra-${KVER} linux-headers-${KVER}" \
+      || echo "[WARN] 커널 빌드 의존 설치 실패 — pre-built .ko 인 경우 무시 가능"
+  fi
 
   # DKMS 빌드 전: 이전 실패한 빌드가 남긴 crash report 삭제.
   # 남아있으면 apport 가 동일 파일 재기록을 거부하여 "File exists" 에러가 로그를 덮는다.
@@ -384,6 +486,15 @@ if [[ "${SKIP_INSTALL}" -eq 0 ]]; then
     echo "[ERR] ${PKG} not installed"; exit 1
   fi
 
+  # 정직한 로그: 드라이버 postinst 가 이 커널로 실제 DKMS 빌드를 했는지 dkms status 로 확인해 사실대로
+  # 남긴다. 헤더 없는 호스트(위에서 빌드 의존 생략)는 빌드하지 않고, 헤더 있는 호스트는 prebuilt 동봉
+  # 여부와 무관하게 postinst 가 컴파일한다(그 경우 뒤 prebuilt 분기가 그 .ko 를 동봉본으로 덮어쓴다).
+  if ns "dkms status ${PKG} 2>/dev/null" | grep -q "${KVER}"; then
+    echo "[INFO] DKMS 가 ${PKG} 를 커널 ${KVER} 로 빌드함(호스트에 헤더 존재)"
+  else
+    echo "[INFO] DKMS 빌드 없음(${PKG}, kernel=${KVER}) — 동봉 .ko 또는 apt 제공 in-tree 모듈 사용"
+  fi
+
   WANT_VER="${DRIVER_VERSION:-}"
   HOST_VER=$(pkg_version)
   if [ -n "${WANT_VER}" ] && [ -n "${HOST_VER}" ] && [ "${WANT_VER}" != "${HOST_VER}" ]; then
@@ -398,39 +509,52 @@ if ns "dpkg -s ${PKG} >/dev/null 2>&1"; then
   ns "apt-mark hold ${HOLD_PKGS} 2>/dev/null || true"
 fi
 
-# --- DKMS 빌드 확인 ---
-echo "[INFO] DKMS 상태 확인 (${PKG}, kernel=${KVER})..."
-DKMS_STATUS=$(ns "dkms status ${PKG} 2>/dev/null" || true)
-if ! echo "${DKMS_STATUS}" | grep -q "${KVER}"; then
-  if [ -z "${DKMS_STATUS}" ]; then
-    echo "[INFO] DKMS 등록 없음 — pre-built .ko 가정, skip"
-  else
-    echo "[INFO] Running dkms autoinstall for kernel ${KVER}..."
-    ns "dkms autoinstall -k ${KVER}" || {
-      echo "[ERR] DKMS 빌드 실패"
-      print_dkms_logs_if_any "${KVER}"
-      exit 1
-    }
-  fi
+# --- prebuilt 분기: 이미지에 이 variant·커널용 .ko 가 구워져 있으면 DKMS 빌드와
+#     아래 modprobe 루프를 대신한다. 동봉본이 없으면 기존 DKMS 경로가 그대로 돈다. ---
+PREBUILT_DONE=0
+if PREBUILT_DIR="$(select_prebuilt_dir "${MODEL}" "${KVER}")"; then
+  install_prebuilt_modules "${MODEL}" "${KVER}" "${PREBUILT_DIR}" || {
+    echo "[ERR] prebuilt 모듈 설치 실패 (${MODEL}/${KVER}) — 종료"
+    exit 1
+  }
+  PREBUILT_DONE=1
 fi
 
-# 사전 의존 모듈 (videobuf2_common → frame_vector 심볼 제공). 실패는 무시.
-ns 'modprobe videobuf2_common 2>/dev/null || true'
+if [[ "${PREBUILT_DONE}" -eq 0 ]]; then
+  # --- DKMS 빌드 확인 ---
+  echo "[INFO] DKMS 상태 확인 (${PKG}, kernel=${KVER})..."
+  DKMS_STATUS=$(ns "dkms status ${PKG} 2>/dev/null" || true)
+  if ! echo "${DKMS_STATUS}" | grep -q "${KVER}"; then
+    if [ -z "${DKMS_STATUS}" ]; then
+      echo "[INFO] DKMS 등록 없음 — pre-built .ko 가정, skip"
+    else
+      echo "[INFO] Running dkms autoinstall for kernel ${KVER}..."
+      ns "dkms autoinstall -k ${KVER}" || {
+        echo "[ERR] DKMS 빌드 실패"
+        print_dkms_logs_if_any "${KVER}"
+        exit 1
+      }
+    fi
+  fi
 
-# --- 커널 모듈 로드 (모델 표의 순서대로) ---
-for mod in ${MODULES}; do
-  echo "[INFO] Loading ${mod} kernel module..."
-  if ! ns "modprobe ${mod} 2>/dev/null"; then
-    echo "[ERR] Failed to load ${mod} module"
-    ns "dmesg | grep -i ${mod%%_*} | tail -10" || true
+  # 사전 의존 모듈 (videobuf2_common → frame_vector 심볼 제공). 실패는 무시.
+  ns 'modprobe videobuf2_common 2>/dev/null || true'
+
+  # --- 커널 모듈 로드 (모델 표의 순서대로) ---
+  for mod in ${MODULES}; do
+    echo "[INFO] Loading ${mod} kernel module..."
+    if ! ns "modprobe ${mod} 2>/dev/null"; then
+      echo "[ERR] Failed to load ${mod} module"
+      ns "dmesg | grep -i ${mod%%_*} | tail -10" || true
+      exit 1
+    fi
+  done
+  if ! ns "lsmod | grep -q ${HEALTH_MODULE}"; then
+    echo "[ERR] ${HEALTH_MODULE} module not loaded after modprobe"
     exit 1
   fi
-done
-if ! ns "lsmod | grep -q ${HEALTH_MODULE}"; then
-  echo "[ERR] ${HEALTH_MODULE} module not loaded after modprobe"
-  exit 1
+  echo "[INFO] kernel modules loaded: ${MODULES}"
 fi
-echo "[INFO] kernel modules loaded: ${MODULES}"
 
 # 장치 검증
 if ! ns "${HEALTH_DEV}"; then
