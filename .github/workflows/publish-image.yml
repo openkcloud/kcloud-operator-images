@@ -18,7 +18,6 @@ on:
         options:
           - kcloud-host-exec
           - kcloud-node-manager
-          - nvidia-driver-ds
           - furiosa-driver-ds
           - tenstorrent-driver-ds
           - kcloud-tt-device-plugin
@@ -37,6 +36,8 @@ on:
     tags:
       # <이미지명>/<태그>. 슬래시가 이미지와 태그를 가른다.
       - "*/*"
+      # 묶음 태그는 publish-bundle.yml 담당. 뒤에 와야 위 패턴을 덮는다.
+      - "!bundle/*"
 
 permissions:
   contents: read

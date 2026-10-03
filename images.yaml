@@ -5,7 +5,7 @@
 #       워크플로의 workflow_dispatch image 선택지에도 같은 이름을 넣는다.
 #       키가 곧 이미지 이름이다(ghcr.io/openkcloud/<키>:<태그>).
 #       build_args 값의 ${TAG} 는 발행 태그로 치환된다.
-# 생성일: 2026-09-09 | 수정일: 2026-09-22
+# 생성일: 2026-09-09 | 수정일: 2026-10-03 (공개 체인 제외 사유 명시)
 # ============================================================
 images:
   kcloud-host-exec:
@@ -14,13 +14,6 @@ images:
   kcloud-node-manager:
     dir: node-device-detector
     # 태그 규약: X.Y.Z (v 접두사 없음)
-  nvidia-driver-ds:
-    dir: driver-installer/nvidia
-    # Dockerfile(구 경로)이 아니라 v17 이 실사용 빌드다.
-    dockerfile: Dockerfile.v17
-    # 태그 규약: vN
-    # 커널별 사전 컴파일: make build-precompiled KERNEL=<커널> 로 <driverVersion>-k<커널>-v1
-    #   (예: 580.126.09-k5.15.0-171-generic-v1). Ubuntu linux-modules-nvidia 를 서명 .ko 로 동봉.
   furiosa-driver-ds:
     dir: driver-installer/furiosa
     # 이미지가 자기 태그를 알아야 설치 마커를 판정할 수 있다.
