@@ -6,8 +6,11 @@
 #       수동 실행 선택지가 images.yaml 키 집합과 같은지 본다. dockerfile 키가
 #       없으면 dir 아래 Dockerfile 을 본다. 인자로 git ref 를 주면 체크아웃 대신
 #       그 ref 의 트리를 검사한다(공개 브랜치 검사용). 어긋나면 종료 코드 1.
+#       kernel-images 묶음은 operator 저장소가 선언한 발행 대상에서 유도한 것이어야 하므로
+#       형제 operator 저장소가 있으면 그쪽 hack/kernel-image-targets.sh 에 대조를 맡긴다.
+#       대조 기준은 그 저장소의 작업 트리다 — "지금 선언한 대상과 이 묶음이 맞는가" 를 본다.
 #       사용: hack/bundle-check.sh [<git ref>]
-# 생성일: 2026-10-03 | 수정일: 2026-10-03 (워크플로 선택지 정합 검사 추가)
+# 생성일: 2026-10-03 | 수정일: 2026-10-05 (kernel-images 묶음과 operator 발행 대상 대조 추가)
 # ============================================================
 set -euo pipefail
 
@@ -147,6 +150,23 @@ else
       fail=1
     fi
   done <<< "$bundle_list"
+
+  # kernel-images 묶음은 operator 저장소의 deploy/kernel-image-targets.yaml 에서 유도한
+  # 것이어야 한다. 그 목록을 보는 태그 실재 게이트가 operator 저장소에 있어 목록도 거기
+  # 있고(CI 에는 이 저장소가 없다), 그래서 한쪽만 고치는 일이 생긴다. 두 저장소가 다 있을
+  # 때 그 어긋남을 여기서 잡는다 — 바꾸는 사람이 어느 쪽에서 돌리든 걸리게 양쪽에 둔다
+  # (반대쪽은 operator 의 release-prepare.sh 2단계).
+  derive=../../kcloud-operator/hack/kernel-image-targets.sh
+  # 호출은 bash "$derive" 이므로 실행 권한은 필요 없다. -x 로 보면 내보내기·복사로 권한만
+  # 빠진 트리에서 대조가 조용히 빠진다.
+  if [ ! -f "$derive" ]; then
+    echo ">> 형제 operator 저장소가 없어 kernel-images 묶음 대조는 건너뛴다 (${derive})."
+  elif printf '%s\n' "$bundle_yaml" | bash "$derive" --check-bundle -; then
+    :
+  else
+    echo "!! kernel-images 묶음이 operator 의 발행 대상 목록과 어긋난다 (${what})." >&2
+    fail=1
+  fi
 fi
 
 if [ "$fail" -ne 0 ]; then

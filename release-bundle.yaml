@@ -5,7 +5,11 @@
 #       images.yaml 의 키여야 한다(빌드 경로·Dockerfile·기본 build-arg 는 그쪽에서 온다).
 #       공개 체인에서 제외된 이미지(nvidia-driver-ds)는 여기에 넣지 않는다 —
 #       공개 저장소에는 그 빌드 경로가 없어 발행이 불가능하다.
-# 생성일: 2026-10-03
+#       kernel-images 묶음은 손으로 적지 않는다. operator 저장소의
+#       deploy/kernel-image-targets.yaml 이 대상 커널·벤더를 선언하고 그쪽
+#       hack/kernel-image-targets.sh --bundle 이 항목을 유도한다. hack/bundle-check.sh 가
+#       두 저장소가 다 있을 때 그 유도 결과와 여기를 대조한다.
+# 생성일: 2026-10-03 | 수정일: 2026-10-05 (커널별 사전 컴파일 이미지 묶음 추가)
 # ============================================================
 bundles:
   # 1.34 라인 설치를 막고 있는 두 이미지. operator 차트가 커맨드 인자
@@ -16,3 +20,29 @@ bundles:
       tag: v3
     - image: generic-dra-driver
       tag: v2
+  # 커널별 사전 컴파일 드라이버 이미지. operator 저장소의
+  #   deploy/kernel-image-targets.yaml 이 대상 커널·벤더를 선언하고, 그쪽
+  #   hack/kernel-image-targets.sh --bundle 이 이 목록을 유도한다 — 손으로 맞추지 말고
+  #   그 출력을 그대로 옮긴다. 두 저장소가 다 있으면 hack/bundle-check.sh 가 어긋남을 잡는다.
+  #   nvidia-driver-ds 커널 이미지는 여기 없다. 공개 저장소에 그 빌드 경로가 없어
+  #   (위 머리말 참고) 내부 트리에서만 구울 수 있다.
+  #
+  # ⛔ 아직 이 태그를 push 하지 말 것. publish-bundle.yml 은 build-arg 를 images.yaml
+  #   에서만 읽어 묶음 항목마다 다른 값을 넘길 수 없다. 사전 컴파일에는 커널마다 다른
+  #   PREBUILD_KERNEL(tenstorrent), PREBUILD_KERNEL·PREBUILD_VARIANT·
+  #   PREBUILD_PKG_VERSION(furiosa) 이 필요하므로, 지금 push 하면 사전 컴파일이 아닌
+  #   DKMS 설치기 이미지가 커널 이미지 태그를 달고 발행된다. 항목별 build-arg 전달
+  #   경로를 먼저 만들어야 한다. 그때까지 이 묶음은 발행 대상 선언으로만 쓴다.
+  kernel-images:
+    - image: furiosa-driver-ds
+      tag: 2026.3.1-rngd-k5.15.0-171-generic-v1
+    - image: furiosa-driver-ds
+      tag: 2026.3.1-rngd-k5.15.0-191-generic-v1
+    - image: furiosa-driver-ds
+      tag: 2026.3.1-rngd-k6.8.0-138-generic-v1
+    - image: tenstorrent-driver-ds
+      tag: 2.11.0-k5.15.0-171-generic-v1
+    - image: tenstorrent-driver-ds
+      tag: 2.11.0-k5.15.0-191-generic-v1
+    - image: tenstorrent-driver-ds
+      tag: 2.11.0-k6.8.0-138-generic-v1

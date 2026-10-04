@@ -1,0 +1,47 @@
+# ============================================================
+# test.yml: push·PR 시 이 저장소의 Go 모듈마다 go test 를 돈다.
+# 상세: 이 저장소에는 root Makefile 이 없고 발행 워크플로 둘은 docker build 만 한다. 그래서
+#       Go 시험이 커밋에 함께 들어와도 아무도 부르지 않았다 — generic-dra-driver 의
+#       선언 예산 가드(TestMaxDeclarationsCoversOperatorBudget)가 그 자리에 있다. 그 가드는
+#       operator 저장소의 AcceleratorDescriptor MaxProperties 합을 이쪽 maxDeclarations 가
+#       담는지 보며, 깨뜨릴 변경은 관측 자리(pciSysfsAttrs)를 늘리는 이쪽이므로 이쪽에서
+#       돌아야 한다. 모듈마다 go.mod 의 go 지시문이 달라(1.22~1.26) matrix 로 전개하고
+#       setup-go 가 그 파일에서 버전을 읽는다.
+#       모듈 목록은 find . -name go.mod 의 전수다. 새 모듈을 더하면 여기도 더해야 한다 —
+#       빠뜨리면 그 모듈 시험이 다시 아무도 안 부르는 자리가 된다.
+# 생성일: 2026-10-05
+# ============================================================
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: go test (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      # 한 모듈이 떨어져도 나머지 결과를 본다. 모듈끼리 의존이 없다.
+      fail-fast: false
+      matrix:
+        module:
+          - furiosa-exporter
+          - generic-device-plugin
+          - generic-dra-driver
+          - node-device-detector
+          - tenstorrent-device-plugin
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+
+      # -count=1 로 캐시를 끈다. 호스트 장치를 stat 하는 시험이 있어 캐시된 결과는
+      # 그 환경을 다시 보지 않는다.
+      - name: Running Tests
+        working-directory: ${{ matrix.module }}
+        run: go test ./... -count=1
