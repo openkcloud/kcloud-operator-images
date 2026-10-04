@@ -5,7 +5,7 @@
 //	들어온다. operator 는 host /dev 를 못 보므로 실재 장치 열거는 이 런타임이
 //	host root 밑에서 직접 한다. operator 가 AcceleratorDescriptor 를 컴파일해 만든다.
 //
-// 생성일: 2026-08-11 | 수정일: 2026-09-18
+// 생성일: 2026-08-11 | 수정일: 2026-10-04
 // ============================================================
 package main
 
@@ -30,6 +30,17 @@ type Config struct {
 	DriverName  string   `json:"driverName"`
 	DeviceClass string   `json:"deviceClass"`
 	DeviceNodes []string `json:"deviceNodes"`
+
+	// Attributes 는 descriptor 가 선언한 속성이다. sysfs 로는 알 수 없는 값(제품명 등)이
+	// 여기로 들어온다 — 이 런타임은 벤더 도구를 모른다. 같은 이름을 sysfs 에서도 읽으면
+	// sysfs 쪽을 쓴다(관측이 선언보다 우선한다).
+	Attributes map[string]string `json:"attributes,omitempty"`
+	// Capacity 는 descriptor 가 선언한 capacity 다. 값은 Quantity 표기(예: "80Gi").
+	Capacity map[string]string `json:"capacity,omitempty"`
+	// CapacityFiles 는 capacity 이름 -> PCI 장치 sysfs 디렉터리 아래 상대 경로다.
+	// 바이트 수를 담은 파일을 읽어 capacity 로 낸다. 어느 파일에 용량이 있는지는 벤더마다
+	// 다르므로 그 지식은 descriptor 에 두고 런타임은 읽기만 한다. 읽히면 선언값을 덮는다.
+	CapacityFiles map[string]string `json:"capacityFiles,omitempty"`
 }
 
 // LoadConfig 는 설정을 읽고 검증한다. 검증 실패면 기동하지 않는다 —
@@ -65,7 +76,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("deviceNodes[%d] 는 절대경로여야 한다: %q", i, g)
 		}
 	}
-	return nil
+	return validateDeclarations(c)
 }
 
 // resolveNodes 는 glob 을 실제 호스트 경로 목록으로 편다.

@@ -4,7 +4,7 @@
 //
 //	써서 장치를 주입한다. 벤더는 모른다 — 전부 설정(발견 템플릿)에서 온다.
 //
-// 생성일: 2026-08-11 | 수정일: 2026-09-18
+// 생성일: 2026-08-11 | 수정일: 2026-10-04
 // ============================================================
 package main
 
@@ -60,13 +60,12 @@ func NewDriver(ctx context.Context, client coreclientset.Interface, config *Conf
 	if err != nil {
 		return nil, fmt.Errorf("장치 발견 실패: %w", err)
 	}
-	devices := make([]resourceapi.Device, len(discovered))
-	for i, dev := range discovered {
-		id := dev.ID
-		devices[i] = resourceapi.Device{
-			Name:       dev.ID,
-			Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{"id": {StringValue: &id}},
-		}
+	devices, pciMissing := buildDevices(config, hostRoot, discovered)
+	if pciMissing > 0 {
+		// PCI 주소를 못 찾은 장치는 PCI 속성 없이 발행된다. 몇 개인지 남긴다 —
+		// /dev 노드에서 BDF 로 가는 길이 벤더마다 같지 않다.
+		klog.FromContext(ctx).Info("PCI 주소를 찾지 못한 장치가 있다",
+			"missing", pciMissing, "total", len(discovered))
 	}
 	resources := resourceslice.DriverResources{
 		Pools: map[string]resourceslice.Pool{
@@ -79,6 +78,21 @@ func NewDriver(ctx context.Context, client coreclientset.Interface, config *Conf
 	}
 
 	return d, nil
+}
+
+// buildDevices 는 발견 결과를 발행할 Device 목록으로 바꾼다. 장치 하나의 속성을 못
+// 읽어도 나머지는 그대로 들어간다. 둘째 반환값은 PCI 주소를 못 찾은 장치 수다.
+func buildDevices(cfg *Config, hostRoot string, discovered []Device) ([]resourceapi.Device, int) {
+	devices := make([]resourceapi.Device, len(discovered))
+	pciMissing := 0
+	for i, dev := range discovered {
+		attrs, caps, pciFound := deviceResources(cfg, hostRoot, dev)
+		if !pciFound {
+			pciMissing++
+		}
+		devices[i] = resourceapi.Device{Name: dev.ID, Attributes: attrs, Capacity: caps}
+	}
+	return devices, pciMissing
 }
 
 // Shutdown 은 helper 를 멈춘다.
