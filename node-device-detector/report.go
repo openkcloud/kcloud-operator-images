@@ -4,7 +4,7 @@
 //
 //	Validation 결과가 있으면 status.validation 을 additive 로 덧붙인다(기존 소비자 무영향).
 //
-// 생성일: 2026-07-16 | 수정일: 2026-09-09
+// 생성일: 2026-07-16 | 수정일: 2026-10-06
 // ============================================================
 package main
 
@@ -197,6 +197,23 @@ func buildValidation(v *ValidationResult) map[string]any {
 	}
 }
 
+// attachConsumers 는 이번 주기의 PodResources 판정으로 status 의 세 키를 덮어쓴다.
+// consumers 와 consumersError 는 배타다(CRD 계약): 성공이면 consumers·consumersObservedAt 를
+// 두고 consumersError 를 지우며, 실패면 그 반대다. 이전 주기의 값은 남기지 않는다 —
+// consumersFromFile 은 늘 판정을 내므로 "모른다" 가 없고, validation 의 additive 선례와 다르다.
+func attachConsumers(status map[string]any, path string, now time.Time) {
+	consumers, at, errText := consumersFromFile(path, now)
+	if consumers != nil {
+		status["consumers"] = consumers
+		status["consumersObservedAt"] = at.UTC().Format(time.RFC3339)
+		delete(status, "consumersError")
+		return
+	}
+	delete(status, "consumers")
+	delete(status, "consumersObservedAt")
+	status["consumersError"] = errText
+}
+
 // Report 는 Snapshot 을 NDR 로 기록한다(Get-or-Create + status update).
 // 기존 main 루프의 write 로직을 그대로 옮긴 것으로, validation 만 additive 로 추가된다.
 func Report(ctx context.Context, c client.Client, snap *Snapshot) error {
@@ -220,6 +237,7 @@ func Report(ctx context.Context, c client.Client, snap *Snapshot) error {
 		if validation != nil {
 			status["validation"] = validation
 		}
+		attachConsumers(status, podResourcesAllocationsPath, time.Now())
 		ndr.Object = map[string]any{
 			"apiVersion": ndrGV.String(),
 			"kind":       "NodeDeviceReport",
@@ -248,6 +266,7 @@ func Report(ctx context.Context, c client.Client, snap *Snapshot) error {
 	if validation != nil {
 		st["validation"] = validation
 	}
+	attachConsumers(st, podResourcesAllocationsPath, time.Now())
 	if err := c.Status().Update(ctx, ndr); err != nil {
 		if ndr.Object["spec"] == nil {
 			ndr.Object["spec"] = map[string]any{"nodeName": node}

@@ -1,7 +1,7 @@
 // ============================================================
 // report_test.go: NDR 기록 빌더 단위 테스트
 // 상세: buildDevices 필드 구성(회귀 0)과 buildValidation additive 매핑 검증.
-// 생성일: 2026-07-16 | 수정일: 2026-09-09
+// 생성일: 2026-07-16 | 수정일: 2026-10-06
 // ============================================================
 package main
 
@@ -547,6 +547,105 @@ func TestReportPreservesObservedMig(t *testing.T) {
 	d := devs[0].(map[string]any)
 	if d["migModeCurrent"] != "Enabled" || d["migCurrentGeometry"] != "1g.6gb x4" {
 		t.Fatalf("Report 가 관측값을 덮어썼다(호출부 미연결): %+v", d)
+	}
+}
+
+// TestReportReplacesConsumersEachCycle 은 Report 가 매 주기 consumers/consumersError 를
+// 배타로 교체하는지 — 그리고 attachConsumers 호출부 자체가 실제로 연결돼 있는지 — 못박는다.
+// 헬퍼만 시험하면 호출부를 지워도 통과한다(TestReportPreservesObservedMig 의 주석과 같은 함정).
+func TestReportReplacesConsumersEachCycle(t *testing.T) {
+	dir := t.TempDir()
+	orig := podResourcesAllocationsPath
+	podResourcesAllocationsPath = filepath.Join(dir, "allocations.json")
+	t.Cleanup(func() { podResourcesAllocationsPath = orig })
+
+	s := runtime.NewScheme()
+	s.AddKnownTypeWithName(ndrGVK, &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(ndrGVK.GroupVersion().WithKind("NodeDeviceReportList"), &unstructured.UnstructuredList{})
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	snap := &Snapshot{Node: "n1"}
+
+	status := func() map[string]any {
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(ndrGVK)
+		if err := c.Get(context.Background(), client.ObjectKey{Name: "n1"}, got); err != nil {
+			t.Fatal(err)
+		}
+		st, _ := got.Object["status"].(map[string]any)
+		return st
+	}
+
+	// 1) create 경로, 파일 없음: consumers·consumersObservedAt 키 없음, consumersError 비어 있지 않음.
+	if err := Report(context.Background(), c, snap); err != nil {
+		t.Fatal(err)
+	}
+	st := status()
+	if _, ok := st["consumers"]; ok {
+		t.Fatalf("1) 파일이 없는데 consumers 키가 있다: %+v", st)
+	}
+	if _, ok := st["consumersObservedAt"]; ok {
+		t.Fatalf("1) 파일이 없는데 consumersObservedAt 키가 있다: %+v", st)
+	}
+	if errText, _ := st["consumersError"].(string); errText == "" {
+		t.Fatalf("1) consumersError 가 비어 있다: %+v", st)
+	}
+
+	// 2) update 경로, 신선한 파일(allocation 하나, deviceIDs ["d1"]): consumers 길이 1·deviceID "d1",
+	//    consumersObservedAt 있음, consumersError 키 없음.
+	fresh := `{"observedAt":"` + time.Now().UTC().Format(time.RFC3339) +
+		`","allocations":[{"namespace":"a","pod":"p","container":"c","resourceName":"r","deviceIDs":["d1"]}]}`
+	if err := os.WriteFile(podResourcesAllocationsPath, []byte(fresh), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Report(context.Background(), c, snap); err != nil {
+		t.Fatal(err)
+	}
+	st = status()
+	consumers, ok := st["consumers"].([]any)
+	if !ok || len(consumers) != 1 || consumers[0].(map[string]any)["deviceID"] != "d1" {
+		t.Fatalf("2) consumers 가 deviceID d1 하나여야 한다: %+v", st)
+	}
+	if _, ok := st["consumersObservedAt"]; !ok {
+		t.Fatalf("2) consumersObservedAt 키가 없다: %+v", st)
+	}
+	if _, ok := st["consumersError"]; ok {
+		t.Fatalf("2) 성공 주기인데 consumersError 가 남아 있다: %+v", st)
+	}
+
+	// 3) update 경로, 파일 삭제: consumers·consumersObservedAt 키 없음(지워짐), consumersError 다시 채워짐.
+	if err := os.Remove(podResourcesAllocationsPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := Report(context.Background(), c, snap); err != nil {
+		t.Fatal(err)
+	}
+	st = status()
+	if _, ok := st["consumers"]; ok {
+		t.Fatalf("3) 실패 주기인데 이전 consumers 가 남았다: %+v", st)
+	}
+	if _, ok := st["consumersObservedAt"]; ok {
+		t.Fatalf("3) 실패 주기인데 이전 consumersObservedAt 가 남았다: %+v", st)
+	}
+	if errText, _ := st["consumersError"].(string); errText == "" {
+		t.Fatalf("3) consumersError 가 다시 채워지지 않았다: %+v", st)
+	}
+
+	// 4) update 경로, 신선한 파일이지만 allocations 가 빈 배열: consumers == []any{}(키 있음·길이 0),
+	//    consumersError 키 없음.
+	empty := `{"observedAt":"` + time.Now().UTC().Format(time.RFC3339) + `","allocations":[]}`
+	if err := os.WriteFile(podResourcesAllocationsPath, []byte(empty), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Report(context.Background(), c, snap); err != nil {
+		t.Fatal(err)
+	}
+	st = status()
+	consumers, ok = st["consumers"].([]any)
+	if !ok || len(consumers) != 0 {
+		t.Fatalf("4) 할당 0건은 빈 목록(키는 있어야 한다): %+v", st)
+	}
+	if _, ok := st["consumersError"]; ok {
+		t.Fatalf("4) 할당 0건인데 consumersError 키가 있다: %+v", st)
 	}
 }
 

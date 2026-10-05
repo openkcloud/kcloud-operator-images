@@ -4,7 +4,7 @@
 //
 //	기존 detector 의 상시·비특권·전노드 프로필을 유지하며 Validation 능력만 additive.
 //
-// 생성일: 2026-03-25 | 수정일: 2026-08-12
+// 생성일: 2026-03-25 | 수정일: 2026-10-06
 // ============================================================
 package main
 
@@ -33,6 +33,14 @@ const excludedNodeLabel = "kcloud.ai/excluded"
 const excludedReasonNodeLabel = "kcloud.ai/excluded-reason"
 
 func main() {
+	// 사이드카 모드: operator 가 이 컨테이너를 Command: ["/podresources-writer"] 로 띄우므로
+	// 실행 파일 이름으로 들어온다. kubelet PodResources 소켓을 10초마다 읽어 공유 파일에 쓰기만
+	// 하고 끝낸다(scan·report·metrics 는 돌지 않는다). --podresources-writer 인자는 중복 방어.
+	if isPodResourcesWriterMode(os.Args) {
+		runPodResourcesWriter(context.Background(), "/var/lib/kubelet/pod-resources/kubelet.sock", podResourcesAllocationsPath)
+		return
+	}
+
 	node := os.Getenv("NODE_NAME")
 	if node == "" {
 		fmt.Println("NODE_NAME empty")
