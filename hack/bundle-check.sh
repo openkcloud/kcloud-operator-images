@@ -4,13 +4,16 @@
 # 상세: images.yaml 의 모든 항목에 대해 그 dir 와 Dockerfile 이 실재하는지,
 #       release-bundle.yaml 의 모든 항목이 images.yaml 의 키인지, 발행 워크플로의
 #       수동 실행 선택지가 images.yaml 키 집합과 같은지 본다. dockerfile 키가
-#       없으면 dir 아래 Dockerfile 을 본다. 인자로 git ref 를 주면 체크아웃 대신
+#       없으면 dir 아래 Dockerfile 을 본다. docs/README.md 의 태그 규약 표 첫 열도 같은
+#       키 집합이어야 한다. 인자로 git ref 를 주면 체크아웃 대신
 #       그 ref 의 트리를 검사한다(공개 브랜치 검사용). 어긋나면 종료 코드 1.
 #       kernel-images 묶음은 operator 저장소가 선언한 발행 대상에서 유도한 것이어야 하므로
 #       형제 operator 저장소가 있으면 그쪽 hack/kernel-image-targets.sh 에 대조를 맡긴다.
-#       대조 기준은 그 저장소의 작업 트리다 — "지금 선언한 대상과 이 묶음이 맞는가" 를 본다.
+#       통합 Furiosa 이미지의 WARBOY_IMAGE build-arg 도 같은 방식으로 operator 차트의
+#       furiosa.devicePluginImage 와 대조한다. 두 대조 기준은 그 저장소의 작업 트리다 —
+#       "지금 선언한 값과 이쪽이 맞는가" 를 본다.
 #       사용: hack/bundle-check.sh [<git ref>]
-# 생성일: 2026-10-03 | 수정일: 2026-10-05 (kernel-images 묶음과 operator 발행 대상 대조 추가)
+# 생성일: 2026-10-03 | 수정일: 2026-10-05 (태그 규약 표와 키 집합 대조 추가)
 # ============================================================
 set -euo pipefail
 
@@ -134,6 +137,42 @@ for c in ((inputs.get("image") or {}).get("options") or []):
   fi
 fi
 
+# 발행 절차 문서의 "태그 규약" 표 첫 열도 같은 키 집합이어야 한다. 선택지·매니페스트는 이
+# 스크립트가 보는데 그 표만 안 보면, 항목을 더하는 사람이 표를 잊어도 아무것도 울지 않는다
+# (operator 의 hack/helm-values-option-check.sh 가 README 표를 values 와 대조하는 것과 같은
+# 성격이다). 공개 트리에는 docs/ 가 없어 표가 없으면 건너뛴다 — 다만 표가 있는데 행을 0개
+# 읽는 것은 파서가 깨진 것이므로 실패로 낸다.
+readme="$(read_blob docs/README.md)"
+if [ -z "$readme" ]; then
+  echo ">> docs/README.md 가 없어 태그 규약 표 대조는 건너뛴다 (${what})."
+else
+  # 다른 표(디렉터리 이름)와 섞이지 않게 그 절만 본다. 다음 제목에서 끊는다.
+  table_names="$(printf '%s\n' "$readme" \
+    | awk '/^### 태그 규약[[:space:]]*$/{f=1;next} /^#{1,6}[[:space:]]/{f=0} f' \
+    | sed -nE 's/^\| `([A-Za-z0-9._-]+)` *\|.*/\1/p' | sort -u)"
+  if [ -z "$table_names" ]; then
+    echo "!! docs/README.md 의 태그 규약 표에서 이미지 이름을 0개 읽었다 (${what})." >&2
+    echo "   표 형식(제목 '### 태그 규약', 첫 열 \`이미지명\`)이 바뀌었는지 확인하라." >&2
+    fail=1
+  else
+    only_table="$(comm -23 <(sort -u <<< "$table_names") <(printf '%s' "$names" | sort -u))"
+    only_images_doc="$(comm -13 <(sort -u <<< "$table_names") <(printf '%s' "$names" | sort -u))"
+    if [ -n "$only_table" ]; then
+      echo "!! 태그 규약 표에만 있고 images.yaml 에 없다 (${what}):" \
+        "$(tr '\n' ' ' <<< "$only_table")" >&2
+      fail=1
+    fi
+    if [ -n "$only_images_doc" ]; then
+      echo "!! images.yaml 에만 있고 태그 규약 표에 없다 (${what}):" \
+        "$(tr '\n' ' ' <<< "$only_images_doc")" >&2
+      fail=1
+    fi
+    if [ -z "$only_table" ] && [ -z "$only_images_doc" ]; then
+      echo ">> 태그 규약 표 $(wc -l <<< "$table_names")행이 images.yaml 키 집합과 같다."
+    fi
+  fi
+fi
+
 # 공개 브랜치에는 아직 이 파일이 없다. 없으면 검사할 묶음도 없다.
 bundle_yaml="$(read_blob release-bundle.yaml)"
 if [ -z "$bundle_yaml" ]; then
@@ -166,6 +205,46 @@ else
   else
     echo "!! kernel-images 묶음이 operator 의 발행 대상 목록과 어긋난다 (${what})." >&2
     fail=1
+  fi
+fi
+
+# 통합 Furiosa 이미지는 Warboy 바이너리를 벤더 공개 이미지에서 꺼내 굽는다. 그 출처를
+# images.yaml 의 build-arg 가 적고, 같은 이미지를 operator 차트도 Warboy device-plugin
+# 기본값으로 쓴다 — 두 값이 갈리면 차트가 쓰는 것과 다른 벤더 버전으로 구워진다. 차트 값이
+# 다른 저장소에 있어 한쪽만 고치는 일이 생기므로 두 저장소가 다 있을 때 여기서 잡는다.
+chart_values=../../kcloud-operator/deploy/helm/values.yaml
+warboy_declared="$(printf '%s\n' "$images_yaml" | python3 -c '
+import sys, yaml
+imgs = (yaml.safe_load(sys.stdin) or {}).get("images") or {}
+key = "furiosa-unified-device-plugin"
+if key not in imgs:
+    print("ABSENT")          # 공개 트리에는 이 항목이 없다(공개 체인 제외)
+else:
+    print(((imgs[key] or {}).get("build_args") or {}).get("WARBOY_IMAGE") or "MISSING")
+')"
+if [ "$warboy_declared" = "ABSENT" ]; then
+  echo ">> images.yaml 에 통합 Furiosa 항목이 없어 Warboy 소스 대조는 건너뛴다 (${what})."
+elif [ ! -f "$chart_values" ]; then
+  echo ">> 형제 operator 저장소가 없어 Warboy 소스 대조는 건너뛴다 (${chart_values})."
+else
+  warboy_chart="$(python3 -c '
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1])) or {}
+print((d.get("furiosa") or {}).get("devicePluginImage") or "MISSING")
+' "$chart_values")"
+  if [ "$warboy_declared" = "MISSING" ]; then
+    echo "!! images.yaml: furiosa-unified-device-plugin 에 build_args.WARBOY_IMAGE 가 없다 (${what})." >&2
+    fail=1
+  elif [ "$warboy_chart" = "MISSING" ]; then
+    echo "!! operator 차트에서 furiosa.devicePluginImage 를 읽지 못했다 (${chart_values})." >&2
+    fail=1
+  elif [ "$warboy_declared" != "$warboy_chart" ]; then
+    echo "!! 통합 Furiosa 이미지의 WARBOY_IMAGE 가 차트 Warboy 기본값과 다르다 (${what}):" >&2
+    echo "     images.yaml : ${warboy_declared}" >&2
+    echo "     차트 values : ${warboy_chart}" >&2
+    fail=1
+  else
+    echo ">> 통합 Furiosa 이미지의 WARBOY_IMAGE 가 차트 Warboy 기본값과 같다 (${warboy_chart})."
   fi
 fi
 
