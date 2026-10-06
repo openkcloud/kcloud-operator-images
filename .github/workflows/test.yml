@@ -13,7 +13,7 @@
 #       돌릴 때만 걸려 같은 자리에 남아 있었다. 러너에는 형제 operator 저장소가 없어
 #       kernel-images 묶음 대조와 Warboy 소스 대조는 건너뜀 출력으로 빠지고, 태그 규약 표
 #       대조·발행 워크플로 선택지 대조·dir/Dockerfile 실재 검사는 돈다.
-# 생성일: 2026-10-05 | 수정일: 2026-10-05 (발행 목록 정합 검사 추가)
+# 생성일: 2026-10-05 | 수정일: 2026-10-06 (nvidia 설치기 셸 시험 잡 추가)
 # ============================================================
 name: Tests
 
@@ -66,3 +66,16 @@ jobs:
       # 인자 없이 돌려 체크아웃된 작업 트리를 본다(ref 를 주면 그 ref 의 트리를 본다).
       - name: Checking the publish list
         run: bash hack/bundle-check.sh
+
+  nvidia-installer-shell:
+    name: nvidia installer shell tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v5
+
+      - name: bash -n
+        run: for f in driver-installer/nvidia/*.sh; do bash -n "$f"; done
+
+      - name: make test
+        run: make -C driver-installer/nvidia test
