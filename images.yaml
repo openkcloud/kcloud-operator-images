@@ -5,7 +5,7 @@
 #       워크플로의 workflow_dispatch image 선택지에도 같은 이름을 넣는다.
 #       키가 곧 이미지 이름이다(ghcr.io/openkcloud/<키>:<태그>).
 #       build_args 값의 ${TAG} 는 발행 태그로 치환된다.
-# 생성일: 2026-09-09 | 수정일: 2026-10-05 (통합 Furiosa device-plugin 등재)
+# 생성일: 2026-09-09 | 수정일: 2026-10-06 (nvidia-driver-ds 기본 태그 v4 설명)
 # ============================================================
 images:
   kcloud-host-exec:

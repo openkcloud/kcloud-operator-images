@@ -74,8 +74,13 @@ jobs:
       - name: Clone the code
         uses: actions/checkout@v5
 
+      # 공개 트리에는 driver-installer/nvidia 가 없다(라이선스 사유로 공개 체인이 제외) — 그때는 건너뛴다.
       - name: bash -n
-        run: for f in driver-installer/nvidia/*.sh; do bash -n "$f"; done
+        run: |
+          if [ ! -d driver-installer/nvidia ]; then echo "skip: driver-installer/nvidia 가 이 트리에 없다"; exit 0; fi
+          for f in driver-installer/nvidia/*.sh; do bash -n "$f"; done
 
       - name: make test
-        run: make -C driver-installer/nvidia test
+        run: |
+          if [ ! -d driver-installer/nvidia ]; then echo "skip: driver-installer/nvidia 가 이 트리에 없다"; exit 0; fi
+          make -C driver-installer/nvidia test
