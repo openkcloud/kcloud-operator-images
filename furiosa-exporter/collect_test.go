@@ -1,6 +1,6 @@
 // ============================================================
 // collect_test.go: 수집 변환 로직 시험(실장치·cgo 없이)
-// 생성일: 2026-08-07
+// 생성일: 2026-08-07 | 수정일: 2026-10-08 (확장 필드 매핑 시험 추가)
 // ============================================================
 package main
 
@@ -68,5 +68,51 @@ func TestCollectSkipsFailedDeviceKeepsOthers(t *testing.T) {
 func TestCollectPropagatesSourceError(t *testing.T) {
 	if _, err := Collect(fakeSource{err: errBoom}); err == nil {
 		t.Fatal("공급원 오류가 삼켜졌다")
+	}
+}
+
+func TestCollectCarriesUUID(t *testing.T) {
+	src := fakeSource{readings: []DeviceReading{{
+		Index: 0, BDF: "0000:27:00.0", UUID: "UUID-A", Alive: true,
+	}}}
+	got, err := Collect(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("샘플 1건을 기대했는데 %d건이다", len(got))
+	}
+	if got[0].UUID != "UUID-A" {
+		t.Errorf("UUID=%q, 기대값 %q", got[0].UUID, "UUID-A")
+	}
+}
+
+func TestCollectCarriesExtendedFields(t *testing.T) {
+	src := fakeSource{readings: []DeviceReading{{
+		Index: 0, BDF: "0000:27:00.0", UUID: "UUID-A", Alive: true,
+		CoreClocks:     []CoreClock{{Core: 0, MHz: 1800}},
+		Governor:       "performance",
+		ThrottleReason: 2,
+		ThrottleValid:  true,
+	}}}
+	got, err := Collect(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("샘플 1건을 기대했는데 %d건이다", len(got))
+	}
+	s := got[0]
+	if want := []CoreClock{{Core: 0, MHz: 1800}}; len(s.CoreClocks) != len(want) || s.CoreClocks[0] != want[0] {
+		t.Errorf("CoreClocks=%+v, 기대값 %+v", s.CoreClocks, want)
+	}
+	if s.Governor != "performance" {
+		t.Errorf("Governor=%q, 기대값 %q", s.Governor, "performance")
+	}
+	if s.ThrottleReason != 2 {
+		t.Errorf("ThrottleReason=%d, 기대값 2", s.ThrottleReason)
+	}
+	if !s.ThrottleValid {
+		t.Error("ThrottleValid=false, 기대값 true")
 	}
 }

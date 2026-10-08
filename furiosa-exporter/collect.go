@@ -1,9 +1,11 @@
 // ============================================================
 // collect.go: 장치 판독을 지표 샘플로 변환한다(순수 로직, cgo 없음)
 // 상세: DeviceSource 뒤에 벤더 SDK 를 숨겨 실장치 없이 시험 가능하게 한다.
-//       장치 하나가 실패해도 나머지 샘플은 살린다 — 부분 실패로 노드 전체
-//       관측을 지우지 않는다.
-// 생성일: 2026-08-07
+//
+//	장치 하나가 실패해도 나머지 샘플은 살린다 — 부분 실패로 노드 전체
+//	관측을 지우지 않는다.
+//
+// 생성일: 2026-08-07 | 수정일: 2026-10-08 (UUID·코어주파수·governor·쓰로틀 필드 추가)
 // ============================================================
 package main
 
@@ -13,6 +15,12 @@ import "fmt"
 type CoreReading struct {
 	Core         uint32
 	UsagePercent float64
+}
+
+// CoreClock 은 PE 코어 하나의 동작 주파수다. 단위는 MHz — 벤더 SMI 원단위를 그대로 쓴다.
+type CoreClock struct {
+	Core uint32
+	MHz  uint32
 }
 
 // DeviceReading 은 벤더 SDK 에서 읽은 장치 하나의 원본 값이다.
@@ -25,12 +33,16 @@ type DeviceReading struct {
 	BDF            string
 	CoreNum        uint32
 	Cores          []CoreReading
+	CoreClocks     []CoreClock
 	DramTotalBytes uint64
 	DramInUseBytes uint64
 	PowerWatts     float64
 	TempSocPeak    float64
 	TempAmbient    float64
 	Alive          bool
+	Governor       string // "performance" | "powersave". 읽지 못하면 빈 문자열
+	ThrottleReason uint32 // 비트마스크. 0 이 정상
+	ThrottleValid  bool   // ThrottleReason 을 실제로 읽었는지. 0 과 미수집을 가른다
 	Err            error
 }
 
@@ -44,7 +56,13 @@ type DeviceSource interface {
 type DeviceSample struct {
 	PCI            string
 	Device         string
+	UUID           string
 	Cores          []CoreReading
+	CoreClocks     []CoreClock
+	Governor       string
+	ThrottleReason uint32
+	ThrottleValid  bool
+	ThrottleEvents uint64 // 누적 전이 횟수. refresher 가 채운다
 	DramTotalBytes uint64
 	DramInUseBytes uint64
 	PowerWatts     float64
@@ -67,7 +85,12 @@ func Collect(src DeviceSource) ([]DeviceSample, error) {
 		out = append(out, DeviceSample{
 			PCI:            r.BDF,
 			Device:         fmt.Sprintf("npu%d", r.Index),
+			UUID:           r.UUID,
 			Cores:          r.Cores,
+			CoreClocks:     r.CoreClocks,
+			Governor:       r.Governor,
+			ThrottleReason: r.ThrottleReason,
+			ThrottleValid:  r.ThrottleValid,
 			DramTotalBytes: r.DramTotalBytes,
 			DramInUseBytes: r.DramInUseBytes,
 			PowerWatts:     r.PowerWatts,

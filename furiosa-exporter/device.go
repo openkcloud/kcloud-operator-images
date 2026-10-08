@@ -3,16 +3,19 @@
 // ============================================================
 // device.go: furiosa-smi 백엔드(cgo). DeviceSource 의 실구현.
 // 상세: 이 파일만 벤더 SDK 를 안다. 링크에 libfuriosa_smi.so 가 필요하므로
-//       smi 빌드 태그 뒤에 둔다 — 그 라이브러리가 없는 개발 머신에서도
-//       나머지 패키지의 시험이 돌아야 한다. Dockerfile 이 -tags smi 로 빌드한다.
-//       Observer 는 시간 창으로 PE 사용률을 계산하므로 프로세스 수명 동안
-//       하나만 만들어 재사용한다.
-// 생성일: 2026-08-07
+//
+//	smi 빌드 태그 뒤에 둔다 — 그 라이브러리가 없는 개발 머신에서도
+//	나머지 패키지의 시험이 돌아야 한다. Dockerfile 이 -tags smi 로 빌드한다.
+//	Observer 는 시간 창으로 PE 사용률을 계산하므로 프로세스 수명 동안
+//	하나만 만들어 재사용한다.
+//
+// 생성일: 2026-08-07 | 수정일: 2026-10-08 (쓰로틀 사유 비트마스크 SMI 호출 추가)
 // ============================================================
 package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/furiosa-ai/furiosa-smi-go/pkg/smi"
 )
@@ -60,6 +63,17 @@ func (s *smiSource) read(d smi.Device) DeviceReading {
 		for _, u := range utils {
 			r.Cores = append(r.Cores, CoreReading{Core: u.Core(), UsagePercent: u.PeUsagePercentage()})
 		}
+	}
+	if freq, err := d.CoreFrequency(); err == nil {
+		for _, pe := range freq.PeFrequency() {
+			r.CoreClocks = append(r.CoreClocks, CoreClock{Core: pe.Core(), MHz: pe.Frequency()})
+		}
+	}
+	if g, err := d.GovernorProfile(); err == nil {
+		r.Governor = strings.ToLower(g.String())
+	}
+	if tr, err := d.ThrottleReason(); err == nil {
+		r.ThrottleReason, r.ThrottleValid = uint32(tr), true
 	}
 	if mem, err := d.MemoryUtilization(); err == nil {
 		for _, b := range mem.Dram().Memory() {

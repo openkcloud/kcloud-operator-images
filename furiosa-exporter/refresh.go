@@ -7,7 +7,7 @@
 //	kcloud-operator/docs/impl/furiosa-version-swap-20260812.md §3.4).
 //	그래서 회차가 비거나 실패하면 핸들을 버리고 다음 회차에 다시 만든다.
 //
-// 생성일: 2026-08-10
+// 생성일: 2026-08-10 | 수정일: 2026-10-08 (쓰로틀 전이 계수 추가)
 // ============================================================
 package main
 
@@ -42,11 +42,19 @@ type refresher struct {
 
 	src   DeviceSource
 	empty int // 연속으로 장치를 못 본 회차 수
+
+	// 쓰로틀 전이 계수. 키는 장치 BDF 다 — 인덱스는 재획득 때 순서가 바뀔 수 있다.
+	// SMI 와 sysfs 어디에도 누적 카운터가 없어 여기서 파생한다. 집계 방식은 upstream
+	// furiosa-ai/furiosa-metrics-exporter 의 internal/collector/throttle.go(Apache-2.0)를 따른다.
+	throttlePrev  map[string]uint32
+	throttleCount map[string]uint64
 }
 
 func newRefresher(f sourceFactory) *refresher {
 	return &refresher{
-		newSource: f,
+		newSource:     f,
+		throttlePrev:  make(map[string]uint32),
+		throttleCount: make(map[string]uint64),
 		giveUp: func() {
 			log.Fatalf("장치를 %d 회차 연속 보지 못했다 — 프로세스를 끝낸다(재기동으로만 복구된다)",
 				maxEmptyCycles)
@@ -68,6 +76,7 @@ func (r *refresher) snapshot() []DeviceSample {
 // 지표가 잠깐 사라지는 쪽보다 나쁘다. 드라이버 교체 중 몇십 초 비는 것은 사실 그대로다.
 func (r *refresher) refresh() {
 	samples := r.read()
+	r.countThrottle(samples)
 	r.publish(samples)
 
 	if len(samples) > 0 {
@@ -77,6 +86,30 @@ func (r *refresher) refresh() {
 	r.empty++
 	if r.empty >= maxEmptyCycles {
 		r.giveUp()
+	}
+}
+
+// countThrottle 은 사유 비트가 0 에서 0 이 아닌 값으로 바뀐 횟수를 장치별로 누적하고
+// 그 값을 샘플에 싣는다.
+//
+// 못 읽은 회차(ThrottleValid=false)는 이전 값을 그대로 둔다. 미수집을 "쓰로틀 해제" 로
+// 읽으면 다음 회차에 없던 전이가 생긴다.
+//
+// 카운터는 프로세스가 재기동하면 0 으로 돌아간다. Prometheus 의 rate·increase 가
+// 리셋을 처리하므로 그대로 둔다.
+func (r *refresher) countThrottle(samples []DeviceSample) {
+	for i := range samples {
+		s := &samples[i]
+		if !s.ThrottleValid {
+			s.ThrottleEvents = r.throttleCount[s.PCI]
+			continue
+		}
+		prev, seen := r.throttlePrev[s.PCI]
+		if seen && prev == 0 && s.ThrottleReason != 0 {
+			r.throttleCount[s.PCI]++
+		}
+		r.throttlePrev[s.PCI] = s.ThrottleReason
+		s.ThrottleEvents = r.throttleCount[s.PCI]
 	}
 }
 
