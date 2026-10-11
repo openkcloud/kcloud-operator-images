@@ -1,11 +1,8 @@
 // ============================================================
 // config_test.go: 일반 device-plugin 설정 읽기·검증·발견 시험
-// 상세: Device 는 이제 설정이 아니라 host /dev 발견 결과다. 스키마(deviceNodes
-//
-//	템플릿) 검증과 발견 로직(discoverDevices/discoverIDs) 을 함께 시험한다.
-//	host 는 tempdir 로 흉내낸다.
-//
-// 생성일: 2026-08-11 | 수정일: 2026-09-20
+// 상세: Device 는 이제 설정이 아니라 host /dev 발견 결과다. 스키마(deviceNodes 템플릿) 검증과
+// 발견 로직(discoverDevices/discoverIDs) 을 함께 시험한다. host 는 tempdir 로 흉내낸다.
+// 생성일: 2026-08-11 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -160,7 +157,7 @@ func TestDiscoverRejectsAdjacentWildcard(t *testing.T) {
 }
 
 // by-id·by-path 같은 디렉터리가 /dev/<벤더>/ 아래 섞여 있어도 장치로 세면 안 된다.
-// 라이브(k8s-worker3)에서 /dev/tenstorrent/ 가 0(카드)+by-id(디렉터리)라 2로 과다광고된 결함 회귀.
+// tenstorrent 는 /dev/tenstorrent/ 아래 카드 번호(0)와 by-id 디렉터리가 함께 있어, 디렉터리까지 세면 과다광고된다.
 func TestDiscoverSkipsNonDeviceDirs(t *testing.T) {
 	root := t.TempDir()
 	touch(t, root, "dev/tenstorrent/0")

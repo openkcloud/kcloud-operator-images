@@ -1,19 +1,8 @@
 # ============================================================
 # test.yml: push·PR 시 Go 모듈마다 go test 를 돌고 발행 목록 정합을 검사한다.
-# 상세: 이 저장소에는 root Makefile 이 없고 발행 워크플로 둘은 docker build 만 한다. 그래서
-#       Go 시험이 커밋에 함께 들어와도 아무도 부르지 않았다 — generic-dra-driver 의
-#       선언 예산 가드(TestMaxDeclarationsCoversOperatorBudget)가 그 자리에 있다. 그 가드는
-#       operator 저장소의 AcceleratorDescriptor MaxProperties 합을 이쪽 maxDeclarations 가
-#       담는지 보며, 깨뜨릴 변경은 관측 자리(pciSysfsAttrs)를 늘리는 이쪽이므로 이쪽에서
-#       돌아야 한다. 모듈마다 go.mod 의 go 지시문이 달라(1.22~1.26) matrix 로 전개하고
-#       setup-go 가 그 파일에서 버전을 읽는다.
-#       모듈 목록은 find . -name go.mod 의 전수다. 새 모듈을 더하면 여기도 더해야 한다 —
-#       빠뜨리면 그 모듈 시험이 다시 아무도 안 부르는 자리가 된다.
-#       bundle 잡은 hack/bundle-check.sh 를 돈다 — 그 스크립트도 릴리스 준비 때와 손으로
-#       돌릴 때만 걸려 같은 자리에 남아 있었다. 러너에는 형제 operator 저장소가 없어
-#       kernel-images 묶음 대조와 Warboy 소스 대조는 건너뜀 출력으로 빠지고, 태그 규약 표
-#       대조·발행 워크플로 선택지 대조·dir/Dockerfile 실재 검사는 돈다.
-# 생성일: 2026-10-05 | 수정일: 2026-10-06 (nvidia 설치기 셸 시험 잡 추가)
+# 상세: 모듈마다 go.mod 의 go 지시문이 달라 matrix 로 전개해 setup-go 가 읽는다. 새 모듈을
+#       추가하면 이 목록도 같이 더해야 한다 — 안 그러면 그 모듈 시험을 아무도 안 부른다.
+# 생성일: 2026-10-05 | 수정일: 2026-10-11
 # ============================================================
 name: Tests
 

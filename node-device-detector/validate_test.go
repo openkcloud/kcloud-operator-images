@@ -1,10 +1,8 @@
 // ============================================================
 // validate_test.go: Validation 능력 단위 테스트
-// 상세: buildVendorSteps/aggregate(순수) + Validate/allocatableForVendor 검증.
-//
-//	5-step 매핑, FAIL step 식별(AC-3), 멀티벤더 접두사, allocatable 매칭을 커버.
-//
-// 생성일: 2026-07-16 | 수정일: 2026-08-12
+// 상세: buildVendorSteps/aggregate(순수) + Validate/allocatableForVendor 검증. 5-step 매핑,
+// FAIL step 식별, 멀티벤더 접두사, allocatable 매칭을 커버한다.
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -201,7 +199,7 @@ func TestBuildVendorSteps_NotExcludedStillFailsOnZeroAllocatable(t *testing.T) {
 
 // TestBuildVendorSteps_ExcludedNodeIsNotApplicable 는 배제 노드에서 devicePlugin·
 // sampleWorkload 가 실패가 아니라 해당없음으로 뜨고, overall Passed 가 그 때문에
-// 꺼지지 않는지 본다. driverModule 은 배제와 무관하게 그대로 평가된다(Task 4 전제).
+// 꺼지지 않는지 본다. driverModule 은 배제와 무관하게 그대로 평가된다.
 func TestBuildVendorSteps_ExcludedNodeIsNotApplicable(t *testing.T) {
 	p := vendorProbe{driverLoaded: true, devGlobKnown: true, allocatable: 0, excluded: true}
 	steps := buildVendorSteps("nvidia", p)
@@ -344,10 +342,9 @@ func TestAllocatableForVendorSumsMigProfiles(t *testing.T) {
 }
 
 // TestUserspaceNvidiaVersion 은 libnvidia-ml.so.1 링크 대상에서 버전을 읽는지 본다.
-// 실측 두 벌을 모두 담는다 — 프로프라이어터리 3-component(2026-08-12, 제어 노드:
-// libnvidia-ml.so.580.173.02) 와 open kernel module 2-component(2026-08-12,
-// 검증 노드: libnvidia-ml.so.595.84). 후자는 자릿수를 박은 패턴이 못 잡아
-// 대조 기능이 통째로 무동작이 됐던 입력이다.
+// 실측 두 벌을 모두 담는다 — 프로프라이어터리 3-component(제어 노드: libnvidia-ml.so.580.173.02)
+// 와 open kernel module 2-component(검증 노드: libnvidia-ml.so.595.84). 후자는 자릿수를 박은
+// 패턴으로는 못 잡아 대조 기능이 무동작이 되는 입력이다.
 func TestUserspaceNvidiaVersion(t *testing.T) {
 	// link 는 libnvidia-ml.so.1 이 가리킬 대상 파일명이다(빈 문자열이면 링크를 안 만든다).
 	// abs 면 절대경로로, 아니면 상대경로로 링크한다.
@@ -417,7 +414,7 @@ func TestUserspaceNvidiaVersion_CoexistingPackagesFollowTheLink(t *testing.T) {
 	}
 }
 
-// TestBuildVendorSteps_DriverVersionMismatch 는 실측 값(2026-08-12, k8s-master)으로
+// TestBuildVendorSteps_DriverVersionMismatch 는 실측 값(k8s-master)으로
 // 커널·사용자공간 버전이 다르면 driverModule 이 실패하고 사유에 둘 다 담기는지 본다.
 func TestBuildVendorSteps_DriverVersionMismatch(t *testing.T) {
 	p := vendorProbe{driverLoaded: true, devGlobKnown: true, driverVer: "580.159.03", userspaceVer: "580.173.02"}
@@ -490,9 +487,9 @@ func TestBuildVendorSteps_WithheldComparisonIsDistinguishable(t *testing.T) {
 	}
 }
 
-// TestBuildVendorSteps_ExcludedNodeStillEvaluatesDriverModule 은 이 태스크의 핵심
-// 전제를 고정한다 — 배제는 devicePlugin/sampleWorkload 만 가리고 driverModule 은
-// 그대로 평가된다. k8s-master 는 실측으로 배제 노드이면서 동시에 버전 불일치다.
+// TestBuildVendorSteps_ExcludedNodeStillEvaluatesDriverModule 은 핵심 전제를 고정한다 —
+// 배제는 devicePlugin/sampleWorkload 만 가리고 driverModule 은 그대로 평가된다.
+// k8s-master 는 실측으로 배제 노드이면서 동시에 버전 불일치다.
 func TestBuildVendorSteps_ExcludedNodeStillEvaluatesDriverModule(t *testing.T) {
 	p := vendorProbe{
 		driverLoaded: true, devGlobKnown: true, allocatable: 0, excluded: true,

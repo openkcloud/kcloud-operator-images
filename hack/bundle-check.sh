@@ -1,19 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # bundle-check.sh: 발행 목록과 저장소 실재의 정합을 검사한다.
-# 상세: images.yaml 의 모든 항목에 대해 그 dir 와 Dockerfile 이 실재하는지,
-#       release-bundle.yaml 의 모든 항목이 images.yaml 의 키인지, 발행 워크플로의
-#       수동 실행 선택지가 images.yaml 키 집합과 같은지 본다. dockerfile 키가
-#       없으면 dir 아래 Dockerfile 을 본다. docs/README.md 의 태그 규약 표 첫 열도 같은
-#       키 집합이어야 한다. 인자로 git ref 를 주면 체크아웃 대신
-#       그 ref 의 트리를 검사한다(공개 브랜치 검사용). 어긋나면 종료 코드 1.
-#       kernel-images 묶음은 operator 저장소가 선언한 발행 대상에서 유도한 것이어야 하므로
-#       형제 operator 저장소가 있으면 그쪽 hack/kernel-image-targets.sh 에 대조를 맡긴다.
-#       통합 Furiosa 이미지의 WARBOY_IMAGE build-arg 도 같은 방식으로 operator 차트의
-#       furiosa.devicePluginImage 와 대조한다. 두 대조 기준은 그 저장소의 작업 트리다 —
-#       "지금 선언한 값과 이쪽이 맞는가" 를 본다.
-#       사용: hack/bundle-check.sh [<git ref>]
-# 생성일: 2026-10-03 | 수정일: 2026-10-05 (태그 규약 표와 키 집합 대조 추가)
+# 상세: images.yaml 의 dir/Dockerfile 실재, release-bundle.yaml 키, 발행 워크플로 선택지,
+#       README 태그 표가 같은 키 집합인지 본다. 사용: hack/bundle-check.sh [<git ref>]
+# 생성일: 2026-10-03 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

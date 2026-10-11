@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # driver-manager.sh: initContainer에서 실행 — 기존 Furiosa NPU 커널 모듈 해제 (Warboy·RNGD 공용)
-# 상세: rolling upgrade 시 이 모델의 커널 모듈을 rmmod 하고 main container 가 재설치한다.
-#       furiosa-warboy/ 와 furiosa-rngd/ 의 driver-manager.sh 를 합친 것이다. 둘은 모델 상수
-#       (PCI id·패키지·모듈)만 달랐다. 모델 표는 entrypoint.sh 와 같은 값을 쓴다.
-#       안전장치(entrypoint.sh 와 동일 a/b/c): (a)전량 vfio-pci passthrough 시 rmmod 미수행,
-#       (b)기존이 desired 보다 최신이면 모듈 해제 안 함, (c)VERSION_SOURCE=Host 시 호스트 버전 존중
+# 상세: rolling upgrade 시 이 모델의 커널 모듈을 rmmod 하고 main container 가 재설치한다. 모델
+#       표는 entrypoint.sh 와 같은 값을 쓴다. 안전장치(a 전량 passthrough 시 미수행/b 다운그레이드
+#       방지/c Host 버전 존중)도 entrypoint.sh 와 같다.
 # 생성일: 2026-09-09
 # ============================================================
 set -euo pipefail

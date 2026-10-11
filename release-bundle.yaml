@@ -1,15 +1,8 @@
 # ============================================================
 # release-bundle.yaml: 태그 하나로 함께 발행할 이미지·태그의 묶음 목록
-# 상세: .github/workflows/publish-bundle.yml 이 `bundle/<묶음 이름>` 태그 push 를 받아
-#       이 파일의 해당 묶음을 읽고 항목마다 별도 job 으로 발행한다. image 값은
-#       images.yaml 의 키여야 한다(빌드 경로·Dockerfile·기본 build-arg 는 그쪽에서 온다).
-#       공개 체인에서 제외된 이미지(nvidia-driver-ds)는 여기에 넣지 않는다 —
-#       공개 저장소에는 그 빌드 경로가 없어 발행이 불가능하다.
-#       kernel-images 묶음은 손으로 적지 않는다. operator 저장소의
-#       deploy/kernel-image-targets.yaml 이 대상 커널·벤더를 선언하고 그쪽
-#       hack/kernel-image-targets.sh --bundle 이 항목을 유도한다. hack/bundle-check.sh 가
-#       두 저장소가 다 있을 때 그 유도 결과와 여기를 대조한다.
-# 생성일: 2026-10-03 | 수정일: 2026-10-05 (커널별 사전 컴파일 이미지 묶음 추가)
+# 상세: publish-bundle.yml 이 `bundle/<묶음 이름>` 태그 push 를 받아 해당 묶음을 읽고 항목마다
+#       별도 job 으로 발행한다. image 값은 images.yaml 의 키다. 공개 체인 제외 이미지는 여기 넣지 않는다.
+# 생성일: 2026-10-03 | 수정일: 2026-10-11
 # ============================================================
 bundles:
   # 1.34 라인 설치를 막고 있는 두 이미지. operator 차트가 커맨드 인자
@@ -26,7 +19,7 @@ bundles:
   #   그 출력을 그대로 옮긴다. 두 저장소가 다 있으면 hack/bundle-check.sh 가 어긋남을 잡는다.
   #   nvidia-driver-ds 커널 이미지는 여기 없다. 공개 저장소에 그 빌드 경로가 없어
   #   (위 머리말 참고) 내부 트리에서만 구울 수 있다.
-  #
+
   # ⛔ 아직 이 태그를 push 하지 말 것. publish-bundle.yml 은 build-arg 를 images.yaml
   #   에서만 읽어 묶음 항목마다 다른 값을 넘길 수 없다. 사전 컴파일에는 커널마다 다른
   #   PREBUILD_KERNEL(tenstorrent), PREBUILD_KERNEL·PREBUILD_VARIANT·

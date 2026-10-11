@@ -1,15 +1,8 @@
 // ============================================================
 // hwmon.go: node-agent 장치 텔레메트리 수집 (커널 hwmon, 무특권)
-// 상세: /sys/class/hwmon 을 훑어 가속기 PCI 에 속한 hwmon 만 골라 온도(°C)/전력(W)을
-//
-//	수집한다. 대상 선별은 hwmon 의 device 링크에서 얻은 PCI 주소가 스캔이 이미
-//	인식한 가속기 PCI 집합에 있는지로 판정하므로, coretemp/nvme 같은 무관 hwmon 은
-//	이름 allowlist 없이 자동 배제된다. 벤더별 파일명 차이(temp_input vs temp1_input,
-//	power1_average vs power1_input vs card_power_input)는 glob 으로 흡수한다.
-//	새 권한·새 볼륨 불필요 — DS 가 이미 /sys 를 읽기전용으로 본다.
-//	설계: docs/superpowers/specs/2026-07-29-device-telemetry-design.md
-//
-// 생성일: 2026-07-29 | 수정일: 2026-07-29
+// 상세: /sys/class/hwmon 을 훑어 device 링크의 PCI 주소가 스캔이 이미 인식한 가속기 집합에
+// 있는 hwmon 만 고른다 — 이름 allowlist 없이 coretemp/nvme 같은 무관 hwmon 이 자동 배제된다.
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package main
 

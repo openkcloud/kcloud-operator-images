@@ -1,11 +1,8 @@
 // ============================================================
 // attributes_test.go: 장치 속성·capacity 수집 시험
-// 상세: 하드웨어 없이 돈다 — host root 를 임시 디렉터리에 두고 실물과 같은 모양의
-//
-//	sysfs 나무(/sys/dev/char 링크, /sys/bus/pci/devices 링크, PCI 속성 파일)를 깐다.
-//	임시 디렉터리에는 char 장치를 만들 수 없어 major:minor 를 주는 함수만 대체한다.
-//
-// 생성일: 2026-10-04 | 수정일: 2026-10-05 (선언 예산 가드의 짝을 operator 쪽 시험으로 가리킴)
+// 상세: 하드웨어 없이 돈다 — host root 를 임시 디렉터리에 두고 실물과 같은 sysfs 나무(/sys/dev/char
+// 링크, /sys/bus/pci/devices 링크, PCI 속성 파일)를 깐다. char 장치는 못 만들어 major:minor 함수만 대체한다.
+// 생성일: 2026-10-04 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -600,17 +597,11 @@ func TestValidateDeclarationsRejectsTooMany(t *testing.T) {
 	}
 }
 
-// operatorDeclarationBudget 은 operator 쪽 AcceleratorDescriptor 가 받아 주는 선언 수다.
-// api/v1alpha1/acceleratordescriptor_types.go 의 attributes·capacity·capacityFiles 가
-// 각각 +kubebuilder:validation:MaxProperties=8 이라 8 × 3 이다.
-//
-// 이 수를 이 저장소에 적는 이유는 바뀔 쪽이 pciSysfsAttrs 라서다. 관측 자리가 늘면
-// maxDeclarations 가 그만큼 줄고, operator 가 입구에서 통과시킨 descriptor 가 여기서
-// Validate 에 걸려 드라이버를 기동 실패로 만든다. 가드는 변경과 같은 자리에서 깨져야 한다.
-//
-// 복사한 값이므로 저쪽 변경은 이 시험이 보지 못한다. 그 반대 방향은 operator 의
-// internal/descriptor/validate_test.go 가 맡는다 — 생성된 CRD 의 세 자리 maxProperties 가
-// 8 인지 거기서 어서션한다. 이 수를 올리려면 두 시험을 함께 고쳐야 한다.
+// operatorDeclarationBudget 은 operator 의 AcceleratorDescriptor 가 받아 주는 선언 수다
+// (api/v1alpha1 의 attributes·capacity·capacityFiles 각 MaxProperties=8, 8×3). 복사한 값이라
+// operator 쪽 변경은 이 시험이 못 본다 — 반대 방향은 operator 의
+// internal/descriptor/validate_test.go 가 생성된 CRD 의 maxProperties=8 을 어서션해 맡는다.
+// 이 수를 바꾸려면 두 시험을 함께 고쳐야 한다.
 const operatorDeclarationBudget = 8 * 3
 
 // 관측 자리를 늘려 선언 예산이 operator 가 받아 주는 수보다 작아지면 여기서 걸린다.

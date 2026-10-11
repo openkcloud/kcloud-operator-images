@@ -1,10 +1,8 @@
 // ============================================================
 // report.go: Snapshot → NodeDeviceReport(status) 기록 능력
-// 상세: 기존 감지 결과(devices/passthroughReserved)를 unstructured NDR 로 R/W 한다.
-//
-//	Validation 결과가 있으면 status.validation 을 additive 로 덧붙인다(기존 소비자 무영향).
-//
-// 생성일: 2026-07-16 | 수정일: 2026-10-06
+// 상세: 기존 감지 결과(devices/passthroughReserved)를 unstructured NDR 로 R/W 한다. Validation
+// 결과가 있으면 status.validation 을 additive 로 덧붙인다(기존 소비자 무영향).
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -27,10 +25,10 @@ var (
 // buildDevices 는 Snapshot 의 Detected 목록을 NDR status.devices 맵으로 변환한다.
 // 필드 구성은 기존 main 루프와 바이트 동등(회귀 0). 각 device 에 대표 드라이버 바인딩을 채운다.
 func buildDevices(snap *Snapshot) []map[string]any {
-	// S2-5 WP-R1: cross-major 재부팅 필요 신호. install/driver-manager 가 rmmod 실패+Require 시
-	// host 노드-레벨 마커를 남긴다(WP-R2). detector 는 host-var 마운트로 read.
-	// ponytail: 단일 노드-레벨 마커라 NVIDIA device 에만 적용(1st 레퍼런스, 멀티벤더 오탐 방지).
-	// 타 벤더는 rmmod 로 수렴(reboot 불요). 벤더별 마커/메이저불일치(계획 §2.1b)는 후속.
+	// cross-major 재부팅 필요 신호. install/driver-manager 가 rmmod 실패+Require 시 host
+	// 노드-레벨 마커를 남기고, detector 는 host-var 마운트로 읽기만 한다.
+	// ponytail: 단일 노드-레벨 마커라 NVIDIA device 에만 적용(멀티벤더 오탐 방지). 타 벤더는
+	// rmmod 로 수렴해 reboot 가 불요하다. 벤더별 마커·메이저불일치는 후속 과제다.
 	needsRebootMarker := fileExists(markerPath("needs-reboot"))
 
 	devices := make([]map[string]any, 0, len(snap.Devices))
@@ -52,8 +50,8 @@ func buildDevices(snap *Snapshot) []map[string]any {
 				dev["driverVersionOnDisk"] = d.onDiskVer
 			}
 			// needsReboot 는 true 일 때만 기록(false 는 생략 → 기존 NDR 과 바이트 동등, 회귀 0).
-			// 로드==디스크(둘 다 알려졌고 같음)면 마커는 스테일 — install 없이 안 지워지는 마커가
-			// 재부팅 예산을 갉지 않도록 무시한다(A3). 디스크 미상이면 판단 못 하므로 마커를 존중.
+			// 로드==디스크(둘 다 알려졌고 같음)면 마커는 스테일이다 — install 없이 안 지워지는 마커가
+			// 재부팅 예산을 갉지 않도록 무시한다. 디스크 미상이면 판단 못 하므로 마커를 존중한다.
 			loadedEqualsDisk := d.ver != "" && d.onDiskVer != "" && d.ver == d.onDiskVer
 			if needsRebootMarker && strings.EqualFold(d.vendor, "nvidia") && !loadedEqualsDisk {
 				dev["needsReboot"] = true
@@ -61,20 +59,12 @@ func buildDevices(snap *Snapshot) []map[string]any {
 			return dev
 		}
 
-		// PCI 주소마다 별도 device entry 를 만든다. NVIDIA 는 MIG 관측을 per-PCI 로 부착하려고
-		// 먼저 이렇게 했지만(Task 2, spec §14.1/§15.3 — 전역 -lgip/-lgi 를 여러 GPU 에 복붙하면
-		// 상태가 뒤섞인다), 카드를 개별로 지목할 수 있어야 하는 건 NPU 도 같다: 소비자 쪽
-		// rngd backend 의 deviceID() 는 PCI 가 없으면 model 로 폴백해 한 노드의 RNGD 카드를 전부
-		// 같은 ID 로 뭉개고, intent.ApplyHealth 의 장치 단위 제외는 PCI 를 키로 삼아 PCI 없는
-		// 장치를 아예 못 뺀다(2026-08-04 라이브: warboy/rngd/tenstorrent 전부 pcie 공란).
-		//
-		// 집계 entry 에 주소 하나를 붙이는 방식은 답이 못 된다 — 카드가 2장이면 나머지 1장에
-		// 대해서는 거짓이 되고, 위 두 소비자 문제는 그대로 남는다.
-		//
-		// 소비자 회귀: NDR 소비자는 이미 NVIDIA 때문에 "벤더당 entry 1개" 를 가정할 수 없는
-		// 상태다(worker1 은 nvidia entry 가 2개). count 를 합산하는 쪽(intent.physicalDeviceCount,
-		// acpp 의 nvidiaPhysicalGPUs, apiserver.ndrEntriesFor)은 fan-out 시 entry 당 count=1 이라
-		// 합이 보존된다. 주소 목록은 *PciCount 와 같은 match 함수에서 나오므로 개수도 일치한다.
+		// PCI 주소마다 별도 device entry 를 만든다 — 집계 entry 에 주소 하나만 붙이는 방식도 답이
+		// 못 된다(카드 2장 이상이면 나머지 카드엔 거짓). NVIDIA MIG 관측·NPU 카드 식별 모두 per-PCI
+		// 부착이 필요하다 — PCI 가 없으면 rngd backend 의 deviceID() 가 model 폴백으로 카드를 전부
+		// 같은 ID 로 뭉개며, intent.ApplyHealth 의 장치별 제외도 PCI 가 없으면 못 한다. 소비자는
+		// 이미 "벤더당 entry 1개" 를 가정 못 한다(worker1 nvidia 2개) — count 합산은 fan-out 시
+		// entry 당 count=1 이라 보존되고, 주소 목록도 같은 match 함수에서 나와 개수가 일치한다.
 		pcis := snap.PciAddrs[vendorKey(d.vendor, d.model)]
 		isNvidia := strings.EqualFold(d.vendor, "nvidia")
 		if len(pcis) == 0 {
@@ -83,7 +73,7 @@ func buildDevices(snap *Snapshot) []map[string]any {
 			if isNvidia {
 				// NVIDIA 는 전역 MigLgip 폴백까지. MIG 필드는 pci 공란으로 fail-closed(Unknown+Err).
 				attachMigObservation(dev, observeMig(""))
-				dev["migLgipOutput"] = snap.MigLgip // Task 11 producer 와 바이트 동등 폴백
+				dev["migLgipOutput"] = snap.MigLgip // 전역 집계 producer 와 바이트 동등 폴백
 			}
 			devices = append(devices, dev)
 			continue
@@ -106,7 +96,7 @@ func buildDevices(snap *Snapshot) []map[string]any {
 			if isNvidia {
 				obs := observeMig(pci)
 				attachMigObservation(dev, obs)
-				dev["migLgipOutput"] = obs.LgipOutput // per-PCI(Task 2) — 더 이상 전역 복붙 아님
+				dev["migLgipOutput"] = obs.LgipOutput // per-PCI 관측값 — 전역 복붙이 아니다
 			}
 			devices = append(devices, dev)
 		}
@@ -115,7 +105,7 @@ func buildDevices(snap *Snapshot) []map[string]any {
 }
 
 // attachMigObservation 은 MigObservation 을 NDR device entry 의 4개 MIG 필드로 매핑한다
-// (DeviceEntry.MigModeCurrent/MigModePending/MigCurrentGeometry/MigObservationError, Task 1).
+// (DeviceEntry.MigModeCurrent/MigModePending/MigCurrentGeometry/MigObservationError).
 func attachMigObservation(dev map[string]any, obs MigObservation) {
 	dev["migModeCurrent"] = obs.ModeCurrent
 	dev["migModePending"] = obs.ModePending
@@ -130,14 +120,11 @@ var migCarryFields = []string{
 }
 
 // preserveObservedMig 는 **이번에 관측하지 못한** GPU 의 MIG 필드를 기존 보고서 값으로 되돌린다.
+// detector 는 비특권 컨테이너라 `/dev/nvidia*` 가 없어 MIG 를 못 본다(호스트 nvidia-smi 는 실행
+// 되지만 GPU 를 못 열어 exit 9). 매 주기 "관측 실패" 를 써 넣으면 operator 가 특권 Job 으로
+// 채운 값을 30초마다 지운다 — label.go 의 operatorOwnedLabels 와 같은 종류의 사고다.
 //
-// detector 는 비특권 컨테이너라 `/dev/nvidia*` 가 없어 MIG 를 못 본다(호스트 nvidia-smi 는
-// 실행되지만 GPU 를 열지 못해 exit 9). 그런데도 매 주기 "Unknown + 관측 실패" 를 써 넣으면,
-// operator 가 특권 Job 으로 제대로 관측해 채워 둔 값을 30초마다 지우게 된다 — 노드 라벨에서
-// 똑같은 일이 있었다(D-4, label.go 의 operatorOwnedLabels).
-//
-// 규칙은 하나다: **우리가 실패했고 저쪽이 성공한 경우에만 물려받는다.** detector 가 언젠가
-// 관측할 수 있게 되면 그때는 새 값이 이긴다.
+// 규칙: 우리가 실패하고 저쪽이 성공한 경우에만 물려받는다. detector 가 다시 관측하면 새 값이 이긴다.
 func preserveObservedMig(fresh []map[string]any, old []any) {
 	prior := map[string]map[string]any{}
 	for _, e := range old {
@@ -231,7 +218,7 @@ func Report(ctx context.Context, c client.Client, snap *Snapshot) error {
 			"devices":             devices,
 			"passthroughReserved": snap.PassthroughReserved,
 			// 관측 시각을 함께 보낸다. 이 값이 없으면 health 판정이 보고서의 신선도를 알 수 없어
-			// 모든 노드를 Unknown 으로 둔다(operator 쪽 계약, R&D base v0.1 §9.3).
+			// 모든 노드를 Unknown 으로 둔다(operator 쪽 계약).
 			"observedAt": time.Now().UTC().Format(time.RFC3339),
 		}
 		if validation != nil {

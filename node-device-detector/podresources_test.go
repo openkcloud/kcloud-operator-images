@@ -1,10 +1,8 @@
 // ============================================================
 // podresources_test.go: PodResources List·공유파일 변환 단위 테스트
-// 상세: 가짜 kubelet PodResourcesLister gRPC 서버로 List 평탄화를 검증하고,
-//
-//	consumersFromFile 의 부재·오래됨·정상 세 경로를 못박는다.
-//
-// 생성일: 2026-10-06 | 수정일: 2026-10-06
+// 상세: 가짜 kubelet PodResourcesLister gRPC 서버로 List 평탄화를 검증하고, consumersFromFile 의
+// 부재·오래됨·정상 세 경로를 못박는다.
+// 생성일: 2026-10-06 | 수정일: 2026-10-11
 // ============================================================
 package main
 

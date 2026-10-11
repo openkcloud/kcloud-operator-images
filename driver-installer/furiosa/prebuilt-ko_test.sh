@@ -35,7 +35,7 @@ if select_prebuilt_dir warboy 6.8.0-138-generic >/dev/null 2>&1; then echo "FAIL
 # 3) 다른 kernel: 아무것도 출력하지 않고 exit 비0.
 if select_prebuilt_dir rngd 5.15.0-171-generic >/dev/null 2>&1; then echo "FAIL kernel"; exit 1; fi
 
-# --- 버전 결합 순수 헬퍼 (I-2): 이미지 태그의 패키지 버전 접두 == 정책 DRIVER_VERSION 여부 ---
+# --- 버전 결합 순수 헬퍼: 이미지 태그의 패키지 버전 접두 == 정책 DRIVER_VERSION 여부 ---
 
 # 4) 태그에서 <variant>-k 앞 패키지 버전 접두 추출.
 v="$(furiosa_pkg_version_from_tag 2026.3.1-rngd-k6.8.0-138-generic-v1 rngd)"

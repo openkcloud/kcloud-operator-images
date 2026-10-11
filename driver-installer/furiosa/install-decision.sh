@@ -1,21 +1,15 @@
 #!/usr/bin/env bash
 # ============================================================
 # install-decision.sh: 드라이버 설치 판단 (순수 함수, entrypoint.sh 가 source 한다)
-# 상세: 설치된 버전만 보지 않고 dpkg 설정 상태까지 본다. 2026-08-10 라이브에서 설치가 도중에
-#       죽어 패키지가 half-configured 로 남았는데, 재시도가 버전 문자열만 보고 skip 해
-#       복구하지 못했다. 그 상태에서는 버전 보고가 막혀 업그레이드 검증이 영원히 실패한다.
-#       빌드 컨텍스트가 이미지마다 달라 rngd·warboy 에 같은 사본을 둔다 —
-#       driver-installer/install-decision_test.sh 가 두 사본의 일치를 지킨다.
+# 상세: 설치된 버전과 dpkg 설정 상태를 함께 보고 설치 여부를 판단하는 순수 함수다. rngd·warboy
+#       이미지에 같은 사본을 두며, 일치 여부는 install-decision_test.sh 가 지킨다.
 # 생성일: 2026-08-10
 # ============================================================
 
 # ver_gt 는 $1 > $2 이면 0(true) 다. dpkg 로 정상 비교되면 그 결과를 쓰고, 형식오류 등으로
 # dpkg 가 판정 불가하면 major 정수 비교로 fallback 한다.
-#
-# **여기 두는 이유**: 이 함수는 decide_install_action 의 다운그레이드 판정을 좌우한다.
-# entrypoint 마다 사본을 두면 시험이 보는 것과 이미지가 쓰는 것이 갈라진다 — 이 파일은
-# install-decision_test.sh 가 두 사본의 동일성을 지키므로 여기가 맞다.
-#
+# 여기 두는 이유: entrypoint 마다 사본을 두면 시험이 보는 것과 이미지가 쓰는 것이 갈라진다 —
+# 이 파일은 install-decision_test.sh 가 두 사본의 동일성을 지키므로 여기가 맞다.
 # 호출부에서 `ns` 를 제공해야 한다.
 ver_gt() {
   local a="$1" b="$2" am bm
@@ -32,18 +26,10 @@ ver_gt() {
 }
 
 # decide_install_action 은 무엇을 할지 하나로 답한다.
-#
-# 인자: <설치된 버전> <dpkg 상태> <목표 버전> <다운그레이드 허용 여부>
-#   설치된 버전 — dpkg-query '${Version}'. 없으면 빈 문자열
-#   dpkg 상태  — dpkg-query '${db:Status-Status}'. installed / half-configured /
-#                unpacked / half-installed / config-files … 없으면 빈 문자열
-#
-# 출력 (한 줄):
-#   install        전량 설치한다
-#   repair         설정을 마무리한다(dpkg --configure). 안 되면 호출부가 install 로 승격
-#   skip           할 일이 없다
-#   skip-downgrade 상위 버전이 이미 있고 다운그레이드가 금지다
-#
+# 인자: <설치된 버전(dpkg-query Version, 없으면 빈 문자열)> <dpkg 상태(Status-Status: installed/
+#   half-configured/unpacked/half-installed/config-files, 없으면 빈 문자열)> <목표 버전> <다운그레이드 허용>
+# 출력(한 줄): install=전량 설치, repair=설정 마무리(dpkg --configure, 실패 시 호출부가 install 로
+#   승격), skip=할 일 없음, skip-downgrade=상위 버전 있고 다운그레이드 금지.
 # 호출부에서 `ns` 를 제공해야 한다(`ver_gt` 는 이 파일이 정의한다).
 decide_install_action() {
   local existing_ver="${1:-}" existing_state="${2:-}" desired_ver="${3:-}" allow_downgrade="${4:-false}"
@@ -78,15 +64,11 @@ decide_install_action() {
 }
 
 # refusal_is_fatal 은 "설치를 거부했다" 를 실패로 보고할지 답한다(0=실패로 보고).
-#
-# job 모드에서만 실패다. operator 가 Job 종료코드로 설치 성공을 읽기 때문이다 — 거부해 놓고
-# exit 0 을 주면 "설치했다" 는 거짓말이 되고, operator 는 검증 타임아웃(기본 10분)을 다 쓴 뒤에야
-# 어긋남을 알아챈다.
-#
-# daemonset 모드는 실패로 보고하지 않는다. 상주 pod 이 exit 1 을 내면 CrashLoopBackOff 로 들어가
-# 드라이버 감시 자체가 멈춘다 — 거부는 정상적인 정상상태일 수 있다(호스트가 더 최신).
-#
-# 호출부는 skip-downgrade 갈래에서만 부른다.
+# job 모드에서만 실패다 — operator 가 Job 종료코드로 설치 성공을 읽어, 거부해 놓고 exit 0 을
+# 주면 거짓 성공이 되고 검증 타임아웃(기본 10분)을 다 쓴 뒤에야 어긋남이 드러난다. daemonset
+# 모드는 실패로 보고하지 않는다 — 상주 pod 이 exit 1 을 내면 CrashLoopBackOff 로 들어가 드라이버
+# 감시 자체가 멈춘다. 거부는 정상 상태일 수 있다(호스트가 더 최신). 호출부는 skip-downgrade
+# 분기에서만 부른다.
 refusal_is_fatal() {
   [ "${1:-daemonset}" = "job" ]
 }

@@ -1,11 +1,8 @@
 # ============================================================
 # Dockerfile: Furiosa exporter 이미지
-# 상세: cgo 링크에 필요한 libfuriosa_smi.so·헤더는 빌드 단계에서만 벤더 apt(furiosa-libsmi,
-#       RNGD 익명 저장소)로 받아 쓰고 최종 이미지에는 담지 않는다. 런타임에는 드라이버 설치기가
-#       호스트에 설치한 같은 .so 를 DaemonSet 이 hostPath 로 읽기 전용 마운트한다.
-#       벤더 패키지는 Section non-free 라 이미지에 동봉(재배포)하지 않는 것이 발행 조건이다.
-#       cgo 라 distroless 불가.
-# 생성일: 2026-08-07 | 수정일: 2026-09-09
+# 상세: cgo 링크용 libfuriosa_smi.so 는 빌드 단계 벤더 apt 에서만 받는다. 재배포 금지 조건상
+#       이미지에 담지 않고, 런타임엔 설치기가 호스트에 둔 같은 .so 를 hostPath 로 마운트한다.
+# 생성일: 2026-08-07 | 수정일: 2026-10-11
 # ============================================================
 FROM golang:1.25 AS build
 # 벤더 apt 저장소 등록 — driver-installer/furiosa/entrypoint.sh 의 rngd(anon) 분기와 같은 출처.

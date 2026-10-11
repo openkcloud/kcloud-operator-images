@@ -1,20 +1,10 @@
 #!/usr/bin/env bash
 # ============================================================
 # entrypoint.sh: Furiosa NPU(Warboy·RNGD 공용) 드라이버 설치 및 상시 모니터링
-# 상세: 모델 판별(FURIOSA_MODEL env 또는 PCI 자동 감지) → APT 소스 등록 → 호스트 커널 빌드
-#       도구 설치 → 드라이버 패키지 설치 → DKMS 조건부 빌드 → 모듈 로드 → 장치 검증
-#       → ready 마커 → 헬스 모니터링 루프.
-#       furiosa-warboy/entrypoint.sh 와 furiosa-rngd/entrypoint.sh 를 하나로 합친 것이다.
-#       두 스크립트는 골격이 같고 모델별 값 7가지(PCI id·패키지·hold 집합·커널 모듈·
-#       헬스 장치·APT 저장소·인증)만 달랐다. 그 값은 아래 모델 표 한 곳에만 둔다.
-#       안전장치(NVIDIA a/b/c 이식): (a)전량 vfio-pci passthrough 시 설치 보류+idle,
-#       (b)기존 설치가 desired 보다 최신이면 다운그레이드 방지, (c)VERSION_SOURCE=Host 시 호스트 버전 존중
-#       사전 컴파일 가드(fail-closed): 동봉 .ko 가 있으면 (I-2)이미지 태그 버전==정책 DRIVER_VERSION
-#       확인 후에만 진행, (I-1)커널 헤더 설치 생략(헤더 없는 호스트의 postinst DKMS 빌드 차단),
-#       설치 후 dkms status 로 실제 빌드 여부를 정직하게 로그.
-#       사전 컴파일 설치 로그는 DKMS 빌드 여부를 단정하지 않는다. 그 판정은 apt 설치 블록의
-#       dkms status 확인이 한다.
-# 생성일: 2026-09-09 | 수정일: 2026-09-24
+# 상세: 모델 판별 → APT 소스 등록 → 드라이버 패키지 설치 → 모듈 로드 → 장치 검증 → 헬스
+#       모니터링 루프. 사전 컴파일 모듈이 동봉돼 있으면 버전 결합을 fail-closed 로 확인한 뒤
+#       그걸로 DKMS 빌드를 대체한다.
+# 생성일: 2026-09-09 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 
@@ -91,7 +81,7 @@ furiosa_pkg_version_from_tag() {
   printf '%s\n' "${tag%%-"${variant}"-k*}"
 }
 
-# furiosa_prebuilt_version_ok <version.txt 태그> <variant> <정책DRIVER_VERSION>: 버전 결합 판정(I-2).
+# furiosa_prebuilt_version_ok <version.txt 태그> <variant> <정책DRIVER_VERSION>: 버전 결합 판정.
 #   태그의 패키지 버전 접두가 정책 DRIVER_VERSION 과 같으면 0. 다르면 두 값을 찍고 1(fail-closed).
 #   .ko 에 MODULE_VERSION 이 없어 런타임 탐지가 불가하므로, 정책이 2026.3.0 인데 이미지가 2026.3.1
 #   .ko 를 조용히 덮어쓰는 것을 여기서 막는다. 정책 버전이 비면 결합 대상이 아니므로 통과한다.
@@ -125,17 +115,11 @@ require_host_ns() {
 }
 
 # ============================================================
-# 모델 표. 두 모델의 차이는 전부 여기에 있다. 새 모델은 case 분기 하나로 추가한다.
-# ============================================================
-#   PCI_DEVICE_ID : Furiosa(0x1ed2) 아래 device id
-#   PKG           : 드라이버 패키지명 (dpkg / apt / dkms 이름이 같다)
-#   EXTRA_PKGS    : 드라이버와 함께 설치하는 필수 패키지
-#   OPTIONAL_PKGS : 실패해도 계속 가는 선택 패키지
-#   HOLD_PKGS     : apt-mark hold 로 자동 업그레이드를 막을 집합
-#   MODULES       : modprobe 순서(공백 구분). 마지막 것이 헬스 판정 모듈이다
-#   HEALTH_DEV    : 장치 존재 검사 셸 조각 (ns 안에서 실행)
-#   APT_LIST_NAME : /etc/apt/sources.list.d/ 아래 파일명
-#   APT_AUTH      : secret = /secrets 마운트 필수, anon = 인증 없음
+# 모델 표. 두 모델의 차이는 전부 여기에 있다 — 새 모델은 case 분기 하나로 추가한다.
+#   PCI_DEVICE_ID/PKG: Furiosa(0x1ed2) 장치 id·드라이버 패키지명(dpkg/apt/dkms 공통).
+#   EXTRA_PKGS/OPTIONAL_PKGS: 필수/실패해도 계속 가는 선택 패키지. HOLD_PKGS: 자동
+#   업그레이드 방지용 apt-mark hold 집합. MODULES: modprobe 순서(마지막이 헬스 판정 모듈).
+#   HEALTH_DEV(ns 안 장치 검사)·APT_LIST_NAME/APT_AUTH(sources.list.d 파일명과 인증: secret/anon).
 select_model() {
   case "$1" in
     warboy)
@@ -395,7 +379,7 @@ source /usr/local/bin/install-decision.sh
 ACTION="$(decide_install_action "${EXISTING_VER}" "${EXISTING_STATE}" "${DRIVER_VERSION:-}" "${ALLOW_DOWNGRADE}")"
 
 # 설정이 끝나지 않은 패키지는 먼저 마무리를 시도한다. 이 상태로 두면 dpkg 가 버전을 정상
-# 보고하지 못해 operator 의 업그레이드 검증이 영원히 실패한다(2026-08-10 라이브).
+# 보고하지 못해 operator 의 업그레이드 검증이 영원히 실패한다.
 if [[ "${ACTION}" == "repair" ]]; then
   echo "[WARN] ${PKG} ${EXISTING_VER} 이 dpkg 상태 '${EXISTING_STATE}' 로 남아 있다 — 설정 마무리 시도"
   apt_lock_wait_and_fix
@@ -430,7 +414,7 @@ case "${ACTION}" in
     ;;
 esac
 
-# --- 버전 결합 가드 (I-2, fail-closed) ---
+# --- 버전 결합 가드 (fail-closed) ---
 # 이 variant·커널용 prebuilt .ko 가 동봉돼 있으면, 이미지 태그의 패키지 버전과 정책 DRIVER_VERSION 이
 # 같은지 apt 작업 전에 확인한다. 다르면 apt 는 정책 버전 userspace 를 깔고 prebuilt 가 다른 버전 .ko 로
 # 조용히 덮어써 불일치가 된다(모듈에 MODULE_VERSION 이 없어 런타임 탐지 불가). 어긋나면 거부한다.
@@ -455,7 +439,7 @@ if [[ "${SKIP_INSTALL}" -eq 0 ]]; then
   ns 'apt-get update'
 
   # 커널 빌드 의존을 드라이버보다 먼저 깐다. 드라이버 postinst 의 DKMS 빌드가 헤더를 요구한다.
-  # 단, 이 variant·커널용 prebuilt .ko 가 동봉돼 있으면 헤더를 깔지 않는다(I-1). 헤더가 없는 호스트는
+  # 단, 이 variant·커널용 prebuilt .ko 가 동봉돼 있으면 헤더를 깔지 않는다. 헤더가 없는 호스트는
   # 드라이버 postinst 의 DKMS AUTOINSTALL 이 빌드를 건너뛰므로, 없애려던 노드 빌드가 사라지고 동봉
   # .ko 만 남는다. 헤더가 이미 있는 호스트는 postinst 가 여전히 컴파일하며, 아래 정직 로그로 드러난다.
   if select_prebuilt_dir "${MODEL}" "${KVER}" >/dev/null 2>&1; then
@@ -502,9 +486,9 @@ if [[ "${SKIP_INSTALL}" -eq 0 ]]; then
   fi
 fi
 
-# hold 재적용은 설치 분기 **밖**이다. 설치를 건너뛴 회차나 도중에 죽었다 복구된 회차에도
-# hold 가 빠진 채로 남으면 노드의 apt 자동 업그레이드가 드라이버를 갈아 끼운다
-# (2026-08-10 라이브에서 실제로 빠진 채 남았다).
+# hold 재적용은 설치 분기 **밖**이다. 설치를 건너뛴 회차나 도중에 죽어 복구된 회차에도
+# hold 가 빠진 채로 남으면 노드의 apt 자동 업그레이드가 드라이버를 갈아 끼운다 —
+# 실제로 이렇게 빠진 채 남은 적이 있다.
 if ns "dpkg -s ${PKG} >/dev/null 2>&1"; then
   ns "apt-mark hold ${HOLD_PKGS} 2>/dev/null || true"
 fi

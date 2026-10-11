@@ -1,12 +1,8 @@
 # ============================================================
 # Dockerfile: Furiosa NPU(Warboy·RNGD 공용) 드라이버 설치 컨테이너 — furiosa-driver-ds
-# 상세: entrypoint.sh 가 모델(FURIOSA_MODEL env 또는 PCI 자동 감지)에 맞는 드라이버 패키지를
-#       nsenter 로 호스트에 설치하고 커널 모듈을 로드한다. 드라이버 패키지는 이미지에
-#       담지 않고 런타임에 APT 저장소에서 받는다.
-#       furiosa-warboy/ 와 furiosa-rngd/ 두 설치기를 하나로 합친 것이다.
-#       Warboy 저장소는 인증이 필요해 /secrets 마운트를 요구하고 RNGD 는 익명이다 —
-#       그 분기는 entrypoint.sh 의 모델 표가 가른다.
-# 생성일: 2026-09-09 | 수정일: 2026-09-23
+# 상세: entrypoint.sh 가 모델에 맞는 드라이버 패키지를 호스트에 설치하고 커널 모듈을 로드한다.
+#       드라이버 패키지는 이미지에 담지 않고 런타임에 APT 저장소에서 받는다.
+# 생성일: 2026-09-09 | 수정일: 2026-10-11
 # ============================================================
 FROM ubuntu:22.04
 
@@ -21,20 +17,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     util-linux procps kmod pciutils jq dkms && \
     rm -rf /var/lib/apt/lists/*
 
-# 사전 컴파일(prebuilt) 옵션: PREBUILD_KERNEL 과 PREBUILD_VARIANT 가 모두 지정되면 그 커널용
-# 드라이버 모듈을 빌드해 이미지에 함께 굽는다. Furiosa 드라이버는 벤더가 DKMS 소스 패키지로
-# 배포하므로(furiosa-driver-rngd 의 dkms.conf), 대상 커널 헤더를 받아 그 소스를 직접 컴파일한다.
-# 산출물은 /opt/furiosa-ko/<variant>/<kernel>/ 아래에 .ko 와 vermagic 파일로 둔다. 값이 비어
-# 있으면 기존 런타임 설치(호스트 apt → DKMS) 이미지와 동일하게 동작한다. 태그 규약은
-# <pkgVersion>-<variant>-k<kernel>-vN 이며, Makefile 이 BUILD_VARIANT 로 이 태그를 넣는다.
-# RNGD 저장소는 공개(Google Artifact Registry)라 자격 증명 없이 빌드된다. Warboy 는 인증이
-# 필요한 사설 저장소(archive.furiosa.ai)에 있어 이 경로로 빌드할 수 없다 — 이미지에 secret 을
-# 담지 않으므로 Warboy 사전 컴파일은 지원 대상에서 제외한다.
-# 벤더 src/Makefile 은 최소 커널 판정에 KERNELDIR 이 아니라 KERNEL_VERSION(기본값 uname -r)을
-# 쓰므로, 빌드 호스트가 아닌 대상 커널로 컴파일하려면 KERNEL_VERSION=<대상 커널> 을 넘긴다.
-# 산출 .ko 의 vermagic 이 대상 커널로 시작하는지 빌드 시 확인해 잘못된 커널 산출물을 차단한다.
-# 빌드 후 linux-headers·build-essential 은 purge 해 이미지 크기를 런타임 전용본 수준으로
-# 유지한다(kmod·dkms 는 런타임 비-prebuilt 경로가 쓰므로 유지).
+# 사전 컴파일(prebuilt) 옵션: PREBUILD_KERNEL·PREBUILD_VARIANT 가 모두 지정되면 그 커널용 드라이버
+# 모듈을 빌드해 굽는다(벤더 DKMS 소스를 커널 헤더로 직접 컴파일, 산출물은
+# /opt/furiosa-ko/<variant>/<kernel>/ 에 .ko·vermagic, 태그 <pkgVersion>-<variant>-k<kernel>-vN).
+# Warboy 는 인증이 필요한 사설 저장소라 secret 을 담지 않는 이 경로에서 제외한다(RNGD 만 공개).
+# KERNEL_VERSION 이 빌드 호스트와 다르면 넘기고 vermagic 으로 불일치를 막는다. 빌드 후
+# linux-headers·build-essential 만 purge 한다 — kmod·dkms 는 비-prebuilt 경로가 쓰므로 유지한다.
 ARG PREBUILD_KERNEL=""
 ARG PREBUILD_VARIANT=""
 ARG PREBUILD_PKG_VERSION=""

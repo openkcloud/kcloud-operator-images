@@ -1,7 +1,7 @@
 // ============================================================
 // report_test.go: NDR 기록 빌더 단위 테스트
 // 상세: buildDevices 필드 구성(회귀 0)과 buildValidation additive 매핑 검증.
-// 생성일: 2026-07-16 | 수정일: 2026-10-06
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -42,7 +42,7 @@ func TestBuildDevices_Fields(t *testing.T) {
 	}
 }
 
-// S2-5 WP-R1: needs-reboot 마커 → NVIDIA device 만 needsReboot=true, 타 벤더/마커부재는 키 생략(회귀 0).
+// needs-reboot 마커 → NVIDIA device 만 needsReboot=true, 타 벤더/마커부재는 키 생략(회귀 0).
 func TestBuildDevices_NeedsReboot(t *testing.T) {
 	tmp := t.TempDir()
 	old := hostPrefix
@@ -102,10 +102,10 @@ func TestBuildDevices_NeedsReboot_LegacyMarkerPath(t *testing.T) {
 	}
 }
 
-// Task 2: 로드==디스크면 스테일 재부팅 마커를 무시한다(A3).
-// needs-reboot 마커는 install Job 재실행만 지워 Idle 에서 로드==디스크여도 래치돼
-// 스테일 마커 하나가 다음 사이클의 재부팅 예산 1을 소모했다. 디스크 버전(Task 1)과
-// 로드 버전이 같으면 needsReboot 를 싣지 않는다. 디스크 미상이면 기존대로 마커를 존중.
+// 로드==디스크면 스테일 재부팅 마커를 무시한다. needs-reboot 마커는 install Job 재실행만
+// 지워 Idle 에서 로드==디스크여도 래치돼, 스테일 마커 하나가 다음 사이클의 재부팅 예산을
+// 소모한다. 디스크 버전과 로드 버전이 같으면 needsReboot 를 싣지 않고, 디스크 미상이면
+// 기존대로 마커를 존중한다.
 func TestBuildDevices_NeedsRebootSuppressedWhenLoadedEqualsDisk(t *testing.T) {
 	tmp := t.TempDir()
 	old := hostPrefix
@@ -160,7 +160,7 @@ func TestBuildDevices_NeedsRebootSuppressedWhenLoadedEqualsDisk(t *testing.T) {
 	}
 }
 
-// migLgipOutput 은 NVIDIA device 에만 부착, 값은 Snapshot.MigLgip 그대로(Task 11b).
+// migLgipOutput 은 NVIDIA device 에만 부착, 값은 Snapshot.MigLgip 그대로.
 func TestBuildDevices_MigLgipOutput(t *testing.T) {
 	snap := &Snapshot{
 		MigLgip: "sample lgip output",
@@ -179,7 +179,7 @@ func TestBuildDevices_MigLgipOutput(t *testing.T) {
 }
 
 // snap.PciAddrs["nvidia"] 가 있으면 nvidia device 는 PCI 개수만큼 fan-out 되고, 각 entry 에
-// pcieAddress + per-PCI MIG 필드(fail-closed observeMig 결과)가 붙는다(Task 2).
+// pcieAddress + per-PCI MIG 필드(fail-closed observeMig 결과)가 붙는다.
 func TestBuildDevices_NvidiaPerPciFanOut(t *testing.T) {
 	snap := &Snapshot{
 		MigLgip:  "global fallback output(사용 안 됨)",
@@ -240,7 +240,7 @@ func TestBuildDevices_NvidiaFallbackKeepsAggregateCount(t *testing.T) {
 
 // 비-NVIDIA 벤더도 PCI 주소가 있으면 카드 1장당 entry 로 갈라진다. 갈라지지 않으면 소비자
 // (rngd backend deviceID)가 한 노드의 카드를 전부 같은 ID 로 뭉개고, intent.ApplyHealth 가
-// 고장 카드 1장을 개별로 뺄 수 없다(2026-08-04 라이브에서 확인된 구멍).
+// 고장 카드 1장을 개별로 뺄 수 없다 — 실제로 있었던 구멍이다.
 // MIG 필드는 NVIDIA 전용이므로 여기 붙으면 안 된다.
 func TestBuildDevices_NonNvidiaPerPciFanOut(t *testing.T) {
 	snap := &Snapshot{
@@ -331,13 +331,11 @@ func TestBuildDevices_NvidiaEntryShapeUnchanged(t *testing.T) {
 	}
 }
 
-// 회귀 방어: PCI 로 제품명을 알아낼 수 없으면 model 은 detect() 가 준 "generic" 그대로다.
-// 이 폴백이 깨지면 소비자(kcloud-operator partition/nvidia backend)의 fail-closed 판정이
-// 무너진다 — 모르는 GPU 를 아는 척하는 쪽이 조용히 잘못 나눈다.
-//
-// 두 경로를 다 본다: 주소 자체가 없는 집계 폴백, 그리고 주소는 있는데 sysfs 를 못 읽는 경우.
-// 가짜 sysfs 루트를 반드시 깔아야 한다 — 안 그러면 이 저장소를 빌드하는 k8s-master 의
-// 실제 GPU 를 읽어 통과 여부가 호스트에 따라 갈린다(위 ShapeUnchanged 와 같은 함정).
+// 회귀 방어: PCI 로 제품명을 알아낼 수 없으면 model 은 detect() 가 준 "generic" 그대로다. 이
+// 폴백이 깨지면 소비자(kcloud-operator partition/nvidia backend)의 fail-closed 판정이 무너진다.
+// 주소가 없는 집계 폴백과, 주소는 있는데 sysfs 를 못 읽는 경우를 둘 다 본다. 가짜 sysfs 루트를
+// 반드시 깔아야 한다 — 안 그러면 이 저장소를 빌드하는 호스트의 실제 GPU 를 읽어 통과 여부가
+// 호스트마다 갈린다(ShapeUnchanged 와 같은 함정).
 func TestBuildDevices_ModelStaysGenericWithoutPCI(t *testing.T) {
 	fakeSysfsPci(t) // 빈 트리: 어떤 주소도 vendor/device 를 못 읽는다
 
@@ -362,7 +360,7 @@ func TestBuildDevices_ModelStaysGenericWithoutPCI(t *testing.T) {
 // fan-out entry 마다 자기 PCI 주소의 장치 ID 로 제품명이 갈린다. 한 노드에 서로 다른 GPU 가
 // 꽂혀 있어도 두 entry 가 같은 이름을 받으면 안 된다 — 벤더 단위 집계로 돌아간 것이다.
 //
-// 픽스처는 k8s-worker1 실측이다(2026-08-11): 0000:18:00.0 = 0x10de:0x20b7 A30,
+// 픽스처는 k8s-worker1 실측이다: 0000:18:00.0 = 0x10de:0x20b7 A30,
 // 0000:86:00.0 = 0x10de:0x25b6 A2.
 func TestBuildDevices_ModelFromPCI(t *testing.T) {
 	root := fakeSysfsPci(t)
@@ -446,9 +444,8 @@ func TestBuildValidation_Map(t *testing.T) {
 
 // TestBuildValidation_NotApplicableStep 은 이 함수가 ValidationStep.NotApplicable 을
 // map 으로 실어 나르는지 본다 — Report()/buildValidation 은 unstructured map 을 손으로
-// 만들므로 struct 에 필드를 추가한 것만으로는 라이브 NDR 에 실리지 않는다(2026-08-12,
-// k8s-master 라이브 검증에서 이 누락을 실측으로 잡았다: notApplicable 이 필드에는
-// 있는데 실제 NDR JSON 에는 없었다).
+// 만들므로 struct 에 필드를 추가한 것만으로는 NDR 에 실리지 않는다. notApplicable 이 실제로
+// 이렇게 빠진 적이 있다(필드에는 있어도 NDR JSON 에는 빠질 수 있다).
 func TestBuildValidation_NotApplicableStep(t *testing.T) {
 	v := &ValidationResult{
 		Passed: true, LastRunTime: time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC), Vendor: "nvidia",
@@ -465,9 +462,8 @@ func TestBuildValidation_NotApplicableStep(t *testing.T) {
 // TestPreserveObservedMig 는 detector 가 관측하지 못한 MIG 값을 기존 보고서에서 물려받는지 본다.
 //
 // detector 는 비특권이라 /dev/nvidia* 가 없어 MIG 를 못 본다(호스트 nvidia-smi 는 실행되지만
-// GPU 를 열지 못해 exit 9). 그런데도 매 주기 "Unknown + 관측 실패" 를 덮어쓰면, operator 가
-// 특권 Job 으로 제대로 관측해 채운 값이 30초마다 지워진다 — 노드 라벨에서 같은 일이 있었다(D-4).
-//
+// GPU 를 열지 못해 exit 9). 매 주기 "관측 실패" 를 덮어쓰면 operator 가 특권 Job 으로 채운
+// 값이 30초마다 지워진다 — label.go 의 같은 사고와 같은 종류다.
 // 깨는 뮤테이션: Report 의 preserveObservedMig 호출을 지우면 관측값이 사라져 실패한다.
 func TestPreserveObservedMig(t *testing.T) {
 	fresh := []map[string]any{
@@ -513,7 +509,7 @@ func TestPreserveObservedMigDoesNotOverrideFreshObservation(t *testing.T) {
 }
 
 // TestReportPreservesObservedMig 는 **Report 가 실제로** 물려받기를 부르는지 본다.
-// 헬퍼만 시험하면 호출부를 지워도 통과한다 — 실제로 그렇게 한 번 속았다.
+// 헬퍼만 시험하면 호출부를 지워도 통과한다 — 실제로 그렇게 속은 적이 있다.
 func TestReportPreservesObservedMig(t *testing.T) {
 	s := runtime.NewScheme()
 	s.AddKnownTypeWithName(ndrGVK, &unstructured.Unstructured{})
@@ -676,10 +672,9 @@ func TestBuildDevices_OnDiskVersion(t *testing.T) {
 
 // TestHandCopiedStructFieldCounts 는 손복사 매핑의 원본 구조체 필드 수를 못박는다.
 //
-// buildValidation 은 ValidationStep 4필드를, buildDevices 는 Detected 7필드를 손으로
-// map 에 옮긴다. 필드를 늘리고 매핑을 안 고치면 그 값은 NDR 에 실리지 않는데, 이 트랙에서
-// NotApplicable 누락이 단위시험·리뷰를 전부 통과하고 라이브에서만 드러났다. 이 시험은
-// 필드 수가 바뀌는 순간 빨개져 매핑을 함께 고치도록 한다.
+// buildValidation 은 ValidationStep 4필드를, buildDevices 는 Detected 7필드를 손으로 map 에
+// 옮긴다. 필드를 늘리고 매핑을 안 고치면 그 값은 NDR 에 실리지 않는다 — NotApplicable 이
+// 실제로 그렇게 빠진 적이 있다. 이 시험은 필드 수가 바뀌는 순간 빨개져 매핑을 함께 고치게 한다.
 func TestHandCopiedStructFieldCounts(t *testing.T) {
 	for _, tc := range []struct {
 		typ  reflect.Type

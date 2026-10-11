@@ -1,12 +1,8 @@
 // ============================================================
 // attributes.go: 장치 속성·capacity 수집
-// 상세: host sysfs 에서 PCI 속성을 읽고 descriptor 가 선언한 값과 합쳐 ResourceSlice
-//
-//	장치 하나에 붙일 Attributes·Capacity 를 만든다. 벤더 지식은 넣지 않는다 —
-//	커널이 주는 /sys/dev/char 링크만 쓰고, 벤더 도구가 있어야 아는 값은 선언으로 받는다.
-//	읽히지 않는 항목은 붙이지 않는다(빈 값이 붙으면 셀렉터가 유효한 값으로 읽는다).
-//
-// 생성일: 2026-10-04
+// 상세: host sysfs 에서 PCI 속성을 읽어 descriptor 선언과 합친다. 벤더 지식 없이 커널이 주는
+// /sys/dev/char 링크만 쓰고, 읽히지 않는 항목은 붙이지 않는다(빈 값은 셀렉터가 유효값으로 읽는다).
+// 생성일: 2026-10-04 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -31,14 +27,12 @@ const sysfsUnknown = "Unknown"
 // 그리고 PCI 관측 자리를 DRA 상한에서 뺀 나머지다.
 var maxDeclarations = resourceapi.ResourceSliceMaxAttributesAndCapacitiesPerDevice - 2 - len(pciSysfsAttrs)
 
-// pciSysfsAttrs 는 PCI 장치 디렉터리에서 그대로 읽히는 속성이다.
-// asInt 면 정수로 싣고 minInt 보다 작은 값은 붙이지 않는다 — numa_node 는 모를 때
-// -1 이고, max_link_width 는 알 수 없으면 0 이다.
+// pciSysfsAttrs 는 PCI 장치 디렉터리에서 그대로 읽히는 속성이다. asInt 면 정수로 싣고 minInt
+// 보다 작은 값은 붙이지 않는다 — numa_node 는 모를 때 -1, max_link_width 는 모를 때 0 이다.
 //
-// 링크 속성은 current_link_* 가 아니라 max_link_* 에서 읽는다. 셀렉터가 맞춰야 하는
-// 것은 장치의 능력이고, current_* 는 그 순간의 협상 결과다 — 절전으로 내려앉은 링크를
-// 기동 시점에 읽으면 그 값이 그대로 광고된다. 슬라이스는 NewDriver 에서 한 번만 만들고
-// 갱신하지 않으므로 뒤에 링크가 올라와도 고쳐지지 않는다.
+// 링크 속성은 current_link_* 가 아니라 max_link_* 에서 읽는다 — 셀렉터가 맞출 것은 장치의
+// 능력이지, 절전으로 내려앉은 그 순간의 협상 결과가 아니다. 슬라이스는 NewDriver 에서 한 번만
+// 만들고 갱신하지 않으므로, 이후 링크가 바뀌어도 반영되지 않는다.
 var pciSysfsAttrs = []struct {
 	name   string
 	file   string

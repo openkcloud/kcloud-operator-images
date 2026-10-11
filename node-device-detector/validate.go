@@ -1,11 +1,8 @@
 // ============================================================
-// validate.go: node-agent Validation 능력 (S2-3, 5-step 비특권 검증)
-// 상세: Snapshot + allocatable(k8s) + host FS 를 근거로 벤더별 5단계 검증을 수행해
-//
-//	NDR.status.validation 원천(ValidationResult)을 만든다. driverModule/deviceNode/
-//	devicePlugin/sampleWorkload 를 게이트로, runtime/CLI 스냅샷은 best-effort 정보로 둔다.
-//
-// 생성일: 2026-07-16 | 수정일: 2026-08-12
+// validate.go: node-agent Validation 능력 (5-step 비특권 검증)
+// 상세: Snapshot + allocatable(k8s) + host FS 로 벤더별 5단계 검증(NDR.status.validation)을
+// 만든다. driverModule/deviceNode/devicePlugin/sampleWorkload 는 게이트, runtime/CLI 는 best-effort 다.
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -106,14 +103,11 @@ func probeVendor(key string, d Detected, allocatable map[string]int64, excluded 
 func buildVendorSteps(key string, p vendorProbe) []ValidationStep {
 	steps := make([]ValidationStep, 0, 5)
 
-	// ① driverModule — 드라이버 모듈 로드 + 버전. 커널 모듈과 사용자공간 라이브러리는
-	// 같은 버전이어야 한다 — 패키지만 올리고 모듈을 재적재(또는 재부팅)하지 않으면
-	// 디스크의 .so 만 새 버전이 되어 nvidia-smi 가 "Driver/library version mismatch"로
-	// 죽는다. 이 판정은 배제 여부와 무관하다(배제는 devicePlugin/sampleWorkload 만 가린다).
-	// 한쪽 버전을 못 읽으면 대조하지 않는다 — 모르는 것을 실패로 적지 않는다. 다만 그
-	// 사실을 메시지에 적는다: "대조해서 같았다" 와 "대조를 못 했다" 가 같은 문구로 나오면
-	// 운영자는 이 판정이 무동작인 것을 볼 수 없다(partition/nvidia 의 Verified vs
-	// VerificationRequired 와 같은 구별이다).
+	// ① driverModule — 드라이버 모듈 로드 + 버전. 커널 모듈과 사용자공간 라이브러리는 같은 버전이어야
+	// 한다 — 패키지만 올리고 모듈을 재적재하지 않으면 nvidia-smi 가 "Driver/library version
+	// mismatch" 로 죽는다. 이 판정은 배제 여부와 무관하다(배제는 devicePlugin/sampleWorkload 만
+	// 가린다). 한쪽 버전을 못 읽으면 대조하지 않되, "대조해서 같았다" 와 "대조를 못 했다" 를
+	// 메시지로 구분한다 — partition/nvidia 의 Verified vs VerificationRequired 와 같은 구별이다.
 	dm := ValidationStep{Name: "driverModule"}
 	switch {
 	case !p.driverLoaded:
@@ -220,7 +214,7 @@ var gateSteps = map[string]bool{
 }
 
 // aggregate 는 벤더별 step 을 단일 ValidationResult 로 합친다.
-// 멀티벤더 노드는 step 이름에 "<vendor>/" 접두사를 붙여 FAIL step 식별(AC-3)을 유지한다.
+// 멀티벤더 노드는 step 이름에 "<vendor>/" 접두사를 붙여 FAIL step 식별을 유지한다.
 // overall Passed 는 gateSteps 전부 통과일 때만 true. NotApplicable 단계는 게이트
 // 실패로 세지 않는다 — 통과도 실패도 아닌 상태이기 때문이다.
 func aggregate(vendors []string, perVendor map[string][]ValidationStep) *ValidationResult {
@@ -270,9 +264,8 @@ func allocatableResourceForVendor(key string, alloc map[string]int64) (string, i
 //
 // 첫 매칭 하나만 보면 **하나의 물리 장치가 프로파일별 리소스명으로 갈리는 경우를 놓친다.**
 // MIG 를 적용한 노드는 nvidia.com/gpu=0 과 nvidia.com/mig-1g.6gb=8 을 함께 광고하는데,
-// 정확 매칭이 nvidia.com/gpu 에서 끝나 0 을 돌려주면 device-plugin 이 죽은 것으로 판정된다.
-// 그 거짓 실패는 노드 보고서의 validation.passed 를 내려 파티션 정책 검증까지 영구 차단한다
-// (2026-08-06 A30 2장 MIG 적용 실측).
+// 정확 매칭이 nvidia.com/gpu 에서 끝나 0 을 돌려주면 device-plugin 이 죽은 것으로 판정돼,
+// validation.passed 가 내려가 파티션 정책 검증까지 막힌다(A30 2장 MIG 적용 실측).
 func matchedResourceNames(key string, alloc map[string]int64) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -326,17 +319,11 @@ const userspaceLibSoname = "libnvidia-ml.so.1"
 // libSonamePrefix 는 링크 대상 파일명에서 버전만 남기기 위해 떼는 접두다.
 const libSonamePrefix = "libnvidia-ml.so."
 
-// userspaceNvidiaVersion 은 libDir/libnvidia-ml.so.1 링크 대상에서 버전을 읽는다.
-//
-// 디렉터리를 훑어 파일명에서 버전을 뽑는 방식은 두 번 틀린다.
-//   - 자릿수 가정: open kernel module 은 2-component 버전(595.84)을 쓰므로 x.y.z 강제
-//     패턴은 아예 못 잡는다. 같은 가정이 scan.go 의 reNvrmVer 에서 두 번 회귀를 냈다
-//     (580.142, 595.84 — scan.go 주석 참조).
-//   - 후보 다중: cross-major 전이 중 구 패키지가 남아 libnvidia-ml.so.580.159.03 과
-//     .595.84 가 공존하면, 디렉터리 순서상 앞선 구버전을 집어 정상 노드에 거짓 불일치를
-//     낸다. 로더가 여는 것은 링크 대상 하나뿐이므로 그것만 본다.
-//
-// 링크가 없거나 대상이 버전 모양이 아니면 빈 문자열 — 호출부가 대조를 보류한다.
+// userspaceNvidiaVersion 은 libDir/libnvidia-ml.so.1 링크 대상에서 버전을 읽는다. 디렉터리를
+// 훑어 파일명에서 버전을 뽑는 방식은 두 번 틀린다 — 자릿수를 가정하면 open kernel module 의
+// 2-component 버전(595.84)을 못 잡고(scan.go 의 reNvrmVer 와 같은 함정), cross-major 전이 중
+// 구 패키지가 남아 여러 버전 파일이 공존하면 구버전을 집어 거짓 불일치를 낸다. 로더가 실제로
+// 여는 링크 대상 하나만 보면 둘 다 피하고, 링크가 없으면 빈 문자열로 대조를 보류한다.
 func userspaceNvidiaVersion(libDir string) string {
 	target, err := os.Readlink(filepath.Join(libDir, userspaceLibSoname))
 	if err != nil {
@@ -375,7 +362,7 @@ func nvidiaRuntimePresent() bool {
 
 // vendorCLISnapshot 은 벤더 CLI 를 host mount 로 best-effort exec 해 한 줄 요약을 얻는다.
 // distroless nonroot 에서 host 바이너리 exec 은 라이브러리 의존으로 실패할 수 있으므로,
-// 어떤 실패든 공란을 반환하며 PASS 판정에는 영향을 주지 않는다(§5.1).
+// 어떤 실패든 공란을 반환하며 PASS 판정에는 영향을 주지 않는다.
 func vendorCLISnapshot(key string) string {
 	var bin string
 	var args []string

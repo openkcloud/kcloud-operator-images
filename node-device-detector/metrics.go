@@ -1,12 +1,8 @@
 // ============================================================
-// metrics.go: node-agent Metrics 능력 (S3-1, Prometheus /metrics 최소셋)
-// 상세: 커스텀 레지스트리로 :9100/metrics 를 goroutine 으로 노출한다. 매 스캔 Snapshot 을
-//
-//	atomic 하게 공유하는 커스텀 Collector 가 벤더-무관 최소셋(디바이스 수/모델/
-//	driverLoaded/driverVersion/allocatable/passthrough/validation/scrape 시각)을 방출한다.
-//	장치 텔레메트리(온도/전력)는 hwmon 수집분(Snapshot.Sensors)을 kcloud_device_* 로 방출한다.
-//
-// 생성일: 2026-07-16 | 수정일: 2026-07-29
+// metrics.go: node-agent Metrics 능력 (Prometheus /metrics 최소셋)
+// 상세: 커스텀 레지스트리로 :9100/metrics 를 goroutine 으로 노출한다. 매 스캔 Snapshot 을 공유하는
+// Collector 가 벤더-무관 최소셋과 hwmon 텔레메트리(kcloud_device_*)를 함께 방출한다.
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -33,8 +29,7 @@ var (
 )
 
 // 장치 텔레메트리(hwmon 수집, 벤더 SDK 불요). 최소셋과 달리 장치(PCI) 단위 계열이라
-// kcloud_device_ 접두사를 쓴다. NVIDIA 는 hwmon 미등록이라 dcgm-exporter 가 담당한다
-// (설계 docs/superpowers/specs/2026-07-29-device-telemetry-design.md §2).
+// kcloud_device_ 접두사를 쓴다. NVIDIA 는 hwmon 미등록이라 dcgm-exporter 가 담당한다.
 var (
 	descTemperature = prometheus.NewDesc("kcloud_device_temperature_celsius", "장치 센서 온도(°C)", []string{"node", "vendor", "model", "pci", "sensor"}, nil)
 	descPower       = prometheus.NewDesc("kcloud_device_power_watts", "장치 전력(W)", []string{"node", "vendor", "model", "pci", "rail"}, nil)
@@ -129,7 +124,7 @@ func (m *metricsCollector) Collect(ch chan<- prometheus.Metric) {
 }
 
 // startMetricsServer 는 커스텀 레지스트리에 collector 를 등록하고 :9100/metrics 를 goroutine 으로 연다.
-// 로컬 비특권 HTTP 서버 — 신규 RBAC 불요(§5.2).
+// 로컬 비특권 HTTP 서버 — 신규 RBAC 불요.
 func startMetricsServer(collector *metricsCollector) {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collector)

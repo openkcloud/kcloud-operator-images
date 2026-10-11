@@ -1,10 +1,8 @@
 // ============================================================
 // podresources.go: kubelet PodResources 수집·공유파일 변환
-// 상세: 사이드카 모드(--podresources-writer)는 kubelet 소켓을 List 해 공유 파일에
-//
-//	원자적으로 쓰고, detector 모드는 그 파일을 읽어 NDR status.consumers 로 옮긴다.
-//
-// 생성일: 2026-10-06 | 수정일: 2026-10-06
+// 상세: 사이드카 모드(--podresources-writer)는 kubelet 소켓을 List 해 공유 파일에 원자적으로
+// 쓰고, detector 모드는 그 파일을 읽어 NDR status.consumers 로 옮긴다.
+// 생성일: 2026-10-06 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -39,7 +37,7 @@ func isPodResourcesWriterMode(args []string) bool {
 }
 
 // Allocation 의 json 태그는 공유 파일의 소문자 키 모양을 고정한다(파일을 읽는 쪽은 대소문자를
-// 가리지 않지만, 쓰는 쪽은 계획서가 적은 모양 그대로 내야 한다).
+// 가리지 않지만, 쓰는 쪽은 태그가 정한 모양 그대로 내야 한다).
 type Allocation struct {
 	Namespace    string   `json:"namespace"`
 	Pod          string   `json:"pod"`

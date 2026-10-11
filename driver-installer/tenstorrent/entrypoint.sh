@@ -25,7 +25,7 @@ MARKER_DIR="/var/lib/kcloud-operator"
 . /usr/local/bin/marker-migrate.sh
 migrate_marker_dir "${MARKER_DIR}"
 
-# RUN_MODE (WP-C-1): daemonset(기본)=상주 healthcheck 루프, job=설치 후 exit 0.
+# RUN_MODE: daemonset(기본)=상주 healthcheck 루프, job=설치 후 exit 0.
 RUN_MODE="${RUN_MODE:-daemonset}"
 # 안전장치 env (기본값 = 기존 동작 보존)
 ALLOW_DOWNGRADE="${ALLOW_DOWNGRADE:-false}"

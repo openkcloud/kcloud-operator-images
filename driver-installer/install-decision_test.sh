@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================
 # install-decision_test.sh: 드라이버 설치 판단 함수 시험 (Furiosa RNGD·Warboy 공용)
-# 상세: 2026-08-10 라이브에서 설치가 도중에 죽어 패키지가 half-configured 로 남았는데,
-#       재시도 pod 이 버전 문자열만 보고 "이미 설치됨" 으로 skip 해 복구하지 못했다.
-#       dpkg 상태를 함께 보게 만든 판단을 고정한다.
+# 상세: dpkg 상태가 half-configured·unpacked 등으로 남으면 버전이 같아도 복구를
+#       우선하는지, 다운그레이드 가드와 거부 보고 분기가 맞는지를 고정한다.
 # 생성일: 2026-08-10
 # ============================================================
 set -uo pipefail
@@ -45,8 +44,7 @@ run_suite_for() {
 
   # 인자: <설치된 버전> <dpkg 상태> <목표 버전> <다운그레이드 허용>
 
-  # 이것이 2026-08-10 실패의 핵심이다. 버전은 목표와 같지만 설정이 미완이라
-  # 손대지 않으면 영원히 그 상태로 남는다.
+  # 버전은 목표와 같지만 설정이 미완이라 손대지 않으면 영원히 그 상태로 남는다.
   check "설정 미완이면 복구한다" repair \
     "$(decide_install_action 2026.2.0 half-configured 2026.2.0 false)"
   check "풀린 상태여도 복구한다" repair \
@@ -94,7 +92,7 @@ run_suite_for() {
 
 run_suite_for "${HERE}/furiosa"
 
-# install-decision.sh 는 furiosa/ 사본 하나뿐이다(2026-09-09 warboy·rngd 설치기 통합).
+# install-decision.sh 는 furiosa/ 사본 하나뿐이다(rngd·warboy 설치기가 이 파일을 공유한다).
 
 if [[ "${FAILED}" -ne 0 ]]; then
   echo "FAIL"

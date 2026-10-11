@@ -3,7 +3,7 @@
 # 상세: 빌드 시 tt-kmd 소스를 특정 태그로 clone → /opt/tt-kmd-src/<ver> 에 baked
 #       (air-gap: 런타임 git clone 제거). entrypoint 가 DKMS 로 빌드/설치.
 #       PREBUILD_KERNEL 지정 시 그 커널용 tenstorrent.ko 를 /opt/tt-kmd-ko/<kernel> 에 함께 굽는다.
-# 생성일: 2026-04-22 | 수정일: 2026-09-22
+# 생성일: 2026-04-22 | 수정일: 2026-10-11
 # ============================================================
 FROM ubuntu:22.04
 
@@ -39,15 +39,12 @@ RUN git clone --depth=1 --branch "${TT_KMD_GIT_TAG}" \
       https://github.com/tenstorrent/tt-kmd "/opt/tt-kmd-src/${TT_KMD_VERSION}" \
     && rm -rf "/opt/tt-kmd-src/${TT_KMD_VERSION}/.git"
 
-# 사전 컴파일(prebuilt) 옵션: PREBUILD_KERNEL 이 지정되면 해당 커널용 tenstorrent.ko 를
-# 이미지에 함께 굽는다. tt-kmd 는 kbuild 외부 모듈 빌드를 지원하므로
-# (Makefile: obj-m += tenstorrent.o), 커널 헤더로 직접 컴파일한다. 산출물은
-# /opt/tt-kmd-ko/<kernel>/ 아래에 tenstorrent.ko 와 vermagic 파일로 둔다. 값이 비어 있으면
-# 기존 DKMS 전용 이미지와 동일하게 동작한다. 태그 규약: <kmd>-k<kernel>-vN.
-# 빌드 후 linux-headers 는 purge 해 이미지 크기를 DKMS 전용본 수준으로 유지한다
-# (kmod 은 유지 — healthcheck.sh 의 lsmod 가 컨테이너에서 쓴다).
-# org.kcloud.prebuild-kernel 라벨은 Makefile build-precompiled 이 --label 로 부여한다
-# (기본 이미지에는 빈 라벨을 남기지 않기 위함).
+# 사전 컴파일(prebuilt) 옵션: PREBUILD_KERNEL 이 지정되면 해당 커널용 tenstorrent.ko 를 이미지에
+# 함께 굽는다. tt-kmd 는 kbuild 외부 모듈 빌드를 지원하므로(obj-m += tenstorrent.o) 커널 헤더로
+# 직접 컴파일하고, 산출물은 /opt/tt-kmd-ko/<kernel>/ 에 .ko·vermagic 로 둔다(태그
+# <kmd>-k<kernel>-vN). 비어 있으면 기존 DKMS 전용 이미지와 동일하게 동작한다. 빌드 후
+# linux-headers 는 purge 하되 kmod 는 유지한다(healthcheck.sh 의 lsmod 가 쓴다). 라벨
+# org.kcloud.prebuild-kernel 은 Makefile build-precompiled 이 --label 로 부여한다.
 ARG PREBUILD_KERNEL=""
 RUN if [ -n "${PREBUILD_KERNEL}" ]; then \
       apt-get update && apt-get install -y --no-install-recommends \

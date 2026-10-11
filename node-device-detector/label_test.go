@@ -1,7 +1,7 @@
 // ============================================================
 // label_test.go: NFD/GFD 라벨 계산 단위 테스트
 // 상세: computeLabels(순수) 라벨 집합 + sanitizeLabelValue 정규화 검증.
-// 생성일: 2026-07-16 | 수정일: 2026-08-12
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -117,10 +117,9 @@ func TestSanitizeLabelValue(t *testing.T) {
 }
 
 // TestLabelKeepsOperatorOwnedLabel 은 detector 가 자기가 만들 수 없는 이름의 kcloud.ai 라벨을
-// 지우지 않는지 고정한다. 지우면 operator 가 붙인 셀렉터 라벨이 스캔마다 사라진다 —
-// 2026-08-04 에는 MIG 파티션이 광고되지 못했고(mig-active), 2026-08-10 에는 광고 주체 전환이
-// 25초마다 되돌아갔다(dra-owned). 두 번 다 "소유 라벨 목록"에 새 이름을 빠뜨려서 생겼으므로,
-// 이 시험은 목록에 없는 새 이름들로도 확인한다.
+// 지우지 않는지 고정한다. 지우면 operator 가 붙인 셀렉터 라벨이 스캔마다 사라진다 — 실제로
+// mig-active·dra-owned 둘 다 "소유 라벨 목록"에 새 이름을 빠뜨려 이 사고가 났다. 이 시험은
+// 목록에 없는 새 이름들로도 확인한다.
 func TestLabelKeepsOperatorOwnedLabel(t *testing.T) {
 	s := runtime.NewScheme()
 	_ = corev1.AddToScheme(s)

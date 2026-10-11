@@ -1,11 +1,8 @@
 // ============================================================
 // reacquire_test.go: 장치를 잃은 뒤 다시 잡는지 시험
-// 상세: 2026-08-10 라이브에서 드라이버 버전 전환 중 모듈이 내려가 /dev/rngd/* 가 사라진
-//
-//	순간에 exporter 가 재기동했고, 그 뒤 드라이버가 정상 복귀했는데도 지표가 영구히
-//	0건이었다. SMI 핸들을 기동 시 한 번만 만들고 다시 만들지 않았기 때문이다.
-//
-// 생성일: 2026-08-10 | 수정일: 2026-10-08 (기동 시 이미 쓰로틀 중인 장치의 seen 가드 시험 추가, 전이 시험 범위 가드 보강)
+// 상세: 드라이버 버전 전환으로 모듈이 내려가 /dev/rngd/* 가 사라지면 exporter 가 재기동한다.
+// SMI 핸들을 기동 시 한 번만 만들면, 드라이버가 복귀해도 그 핸들은 계속 빈 값을 낸다.
+// 생성일: 2026-08-10 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -17,9 +14,9 @@ import (
 
 // perSourceFactory 는 **공급원 인스턴스마다 결과가 고정된** 가짜다.
 //
-// 실제 SMI 핸들이 그렇다. 장치가 없는 순간에 만든 핸들은 그 뒤 드라이버가 돌아와도 계속 빈
-// 목록을 돌려준다 — 그것이 2026-08-10 에 지표가 영구히 0건이던 이유다. 따라서 한 핸들을
-// 계속 쓰는 경로에서는 결과가 절대 나아지지 않아야 하고, 새 세상을 보려면 재획득해야 한다.
+// 실제 SMI 핸들이 그렇다. 장치가 없는 순간에 만든 핸들은 드라이버가 돌아와도 계속 빈 목록을
+// 돌려준다 — 그래서 지표가 영구히 0건이 된다. 한 핸들을 계속 쓰는 경로에서는 결과가 절대
+// 나아지지 않아야 하고, 새 세상을 보려면 재획득해야 한다.
 type perSourceFactory struct {
 	created int
 	results []fakeSource // 생성 회차별 결과. 모자라면 마지막 것을 반복한다.
@@ -53,8 +50,8 @@ func liveDevice() []DeviceReading {
 
 // TestRefresherReacquiresAfterDeviceLoss 는 장치가 사라졌다 돌아오면 지표가 돌아오는지 본다.
 //
-// 이것이 2026-08-10 실패다. 재기동 시점에 장치가 없어 첫 공급원이 빈 목록을 물고 굳었고,
-// 드라이버가 돌아온 뒤에도 그 핸들을 계속 써서 영원히 0건이었다.
+// 재기동 시점에 장치가 없으면 첫 공급원이 빈 목록을 물고 굳어, 드라이버가 돌아온 뒤에도
+// 그 핸들을 계속 쓰면 영원히 0건이 된다.
 //
 // 깨는 뮤테이션: refresher 가 공급원을 한 번만 만들고 재생성하지 않게 하면 실패한다.
 func TestRefresherReacquiresAfterDeviceLoss(t *testing.T) {
@@ -144,11 +141,9 @@ func TestRefresherSurvivesFactoryFailure(t *testing.T) {
 }
 
 // TestRefresherGivesUpAfterProlongedAbsence 는 장치를 오래 못 보면 프로세스를 끝내는지 본다.
-//
-// 이것이 2026-08-10 재검증에서 드러난 진짜 복구 조건이다. 장치가 없는 순간에 뜬 프로세스는
-// `smi.Init()` 을 몇 번을 다시 불러도 끝내 장치를 보지 못했고(라이브에서 9회차 이상 관측),
-// 같은 이미지·같은 마운트로 **새 프로세스**를 띄우면 즉시 14개 시계열이 나왔다.
-// 프로세스 안에서는 못 고친다 — 끝내고 kubelet 이 새로 띄우게 하는 것이 유일한 복구다.
+// 장치가 없는 순간에 뜬 프로세스는 재시도로 복구되지 않는다 — 벤더 라이브러리 초기화가
+// 프로세스 안에서 되돌려지지 않기 때문이다. 같은 설정의 새 프로세스는 즉시 정상화되므로
+// 유일한 복구는 끝내고 kubelet 이 새로 띄우게 하는 것이다.
 //
 // 깨는 뮤테이션: giveUp 호출을 지우면 영원히 0건인 채로 살아남아 실패한다.
 func TestRefresherGivesUpAfterProlongedAbsence(t *testing.T) {
@@ -194,12 +189,10 @@ func TestRefresherResetsAbsenceCountOnRecovery(t *testing.T) {
 	}
 }
 
-// TestRefresherDropsStaleSnapshotWhenDevicesVanish 는 장치를 못 읽게 된 회차에 마지막 정상값을
-// 계속 내보내지 않는지 본다.
+// TestRefresherDropsStaleSnapshotWhenDevicesVanish 는 장치를 못 읽은 회차에 마지막 정상값을 내보내지 않는지 본다.
 //
-// 붙들고 있으면 장치가 실제로 죽은 동안에도 `kcloud_furiosa_device_alive` 가 1 을 보고한다.
-// 없는 것을 있다고 말하는 쪽이 지표가 잠깐 비는 쪽보다 나쁘다 — 후자는 absent() 로 잡히지만
-// 전자는 아무도 못 알아챈다.
+// 붙들고 있으면 장치가 죽은 동안에도 kcloud_furiosa_device_alive 가 1 을 보고한다 — 없는 것을
+// 있다고 말하는 쪽이, 지표가 잠깐 비어 absent() 로 잡히는 쪽보다 나쁘다.
 //
 // 깨는 뮤테이션: publish 를 `if len(samples) > 0` 로 감싸면 낡은 값이 남아 실패한다.
 func TestRefresherDropsStaleSnapshotWhenDevicesVanish(t *testing.T) {
@@ -228,18 +221,16 @@ func TestRefresherDropsStaleSnapshotWhenDevicesVanish(t *testing.T) {
 	}
 }
 
-// TestMaxEmptyCyclesClearsObservedSwapWindow 는 임계값이 정상 드라이버 교체 구간보다
-// 넉넉한지 본다.
+// TestMaxEmptyCyclesClearsObservedSwapWindow 는 임계값이 정상 드라이버 교체 구간보다 넉넉한지 본다.
 //
-// 다른 임계값 시험들은 `range maxEmptyCycles-1` 로 상수에 맞춰 도므로 상수를 1 로 낮춰도
-// 그대로 통과한다 — 그 값은 정상 교체(2026-08-10 라이브에서 장치 부재 약 50초) 중에
-// exporter 가 스스로 죽게 만든다. 상수를 실제 기준에 못박는다.
+// 다른 임계값 시험은 상수를 따라가므로 낮춰도 통과한다. 이 시험만 상수를 실측 교체
+// 구간(약 50초)과 직접 대조해, 너무 낮춰 exporter 가 스스로 죽는 회귀를 잡는다.
 //
 // 깨는 뮤테이션: maxEmptyCycles 를 5 이하로 낮추면 실패한다.
 func TestMaxEmptyCyclesClearsObservedSwapWindow(t *testing.T) {
 	const (
 		defaultInterval   = 10 * time.Second // main.go 의 -interval 기본값
-		observedSwapBlind = 50 * time.Second // 2026-08-10 라이브 관측
+		observedSwapBlind = 50 * time.Second // 정상 드라이버 교체 중 실측
 	)
 	tolerated := time.Duration(maxEmptyCycles) * defaultInterval
 	if tolerated <= observedSwapBlind {

@@ -1,4 +1,4 @@
-<!-- README.md: Tenstorrent tt-kmd 컨테이너화 드라이버 설치기 사용법 | 생성일: 2026-04-22 | 수정일: 2026-10-01 -->
+<!-- README.md: Tenstorrent tt-kmd 컨테이너화 드라이버 설치기 사용법 | 생성일: 2026-04-22 | 수정일: 2026-10-11 -->
 
 # Tenstorrent tt-kmd 드라이버 컨테이너
 
@@ -45,12 +45,6 @@ Kubernetes DaemonSet으로 배포하여 호스트 커널 모듈 상태를 지속
 lsmod | grep tenstorrent
 ls /dev/tenstorrent/
 ```
-
-### k8s-worker3 현황
-
-`k8s-worker3`에는 이미 `tenstorrent` 모듈이 로드되어 있습니다.
-이 경우 entrypoint.sh는 **설치 단계를 건너뛰고(no-op)** 즉시 ready 상태로
-헬스 모니터링 루프에 진입합니다.
 
 ## 환경 변수
 

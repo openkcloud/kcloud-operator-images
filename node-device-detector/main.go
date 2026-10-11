@@ -1,10 +1,8 @@
 // ============================================================
 // main.go: node-agent 부트스트랩 + 재조정 루프
-// 상세: env/k8s client 초기화 후 30초 주기로 scan → validate → report 능력을 구동한다.
-//
-//	기존 detector 의 상시·비특권·전노드 프로필을 유지하며 Validation 능력만 additive.
-//
-// 생성일: 2026-03-25 | 수정일: 2026-10-06
+// 상세: env/k8s client 초기화 후 30초 주기로 scan → validate → report 능력을 구동한다. 기존
+// detector 의 상시·비특권·전노드 프로필은 유지하며 Validation 능력만 additive 로 얹는다.
+// 생성일: 2026-03-25 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -49,7 +47,7 @@ func main() {
 
 	// 능력 토글. scan/report 는 항상 on(하위호환).
 	//  - VALIDATION/METRICS: 기본 on(비특권, 신규 RBAC 불요).
-	//  - LABELS: 기본 off — node patch RBAC 필요(Phase 2 helm 반영 후 opt-in).
+	//  - LABELS: 기본 off — node patch RBAC 필요, helm 에 RBAC 확대가 반영되면 opt-in 으로 켠다.
 	enableValidation := os.Getenv("NODEAGENT_ENABLE_VALIDATION") != "false"
 	enableMetrics := os.Getenv("NODEAGENT_ENABLE_METRICS") != "false"
 	enableLabels := os.Getenv("NODEAGENT_ENABLE_LABELS") == "true"
@@ -120,7 +118,7 @@ func fetchAllocatable(ctx context.Context, c client.Client, node string) (map[st
 }
 
 // fetchAllocated 는 이 노드에 스케줄된 Pod 들의 가속기 requests 합을 리소스별로 집계한다.
-// "장치 busy%" 대신 전 벤더에 공통 정의가 가능한 스케줄 관점 사용률이다(설계 §D3).
+// "장치 busy%" 대신 전 벤더에 공통 정의가 가능한 스케줄 관점 사용률이다.
 // 확장 리소스만 대상으로 하려고 "<domain>/<name>" 형태(슬래시 포함) 키만 남기며,
 // 벤더 판정은 metrics 가 allocatable 과 동일한 매핑으로 수행한다.
 // 조회 실패 시 nil — 해당 시리즈만 빠지고 다른 metric 은 영향 없다(fail-open).

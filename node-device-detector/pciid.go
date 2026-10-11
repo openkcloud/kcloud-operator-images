@@ -1,12 +1,8 @@
 // ============================================================
 // pciid.go: PCI 장치 ID 로 가속기 제품명을 판정
-// 상세: sysfs 의 vendor/device 파일만 읽으므로 특권 도구(nvidia-smi 등) 없이 동작한다.
-//
-//	detect() 는 벤더 단위 집계라 model 이 "generic" 으로 뭉개지는데, 보고 단계에서
-//	PCI 주소마다 이 판정을 태워 실제 제품명을 싣는다. 판정은 3단 계층이다
-//	(pcidb.go): ① 실측 확인 표 ② 표준 PCI DB ③ 빈 문자열.
-//
-// 생성일: 2026-08-11 | 수정일: 2026-08-12
+// 상세: sysfs 의 vendor/device 파일만 읽어 특권 도구 없이 동작한다. detect() 로 뭉개진
+// "generic" 을 보고 단계에서 PCI 주소마다 3단 계층(실측 표→표준 DB→빈 문자열)으로 채운다.
+// 생성일: 2026-08-11 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -18,8 +14,8 @@ import (
 // pciProduct 는 "<vendor>:<device>"(0x 접두 없는 소문자) → 제품명 표다.
 // 실측으로 확인한 것만 넣는다 — 지어낸 ID 는 fail-closed 판정을 조용히 무너뜨린다.
 var pciProduct = map[string]string{
-	"10de:20b7": "a30", // k8s-worker1 0000:18:00.0 (nvidia-smi 제품명과 대조, 2026-08-11)
-	"10de:25b6": "a2",  // k8s-worker1 0000:86:00.0 (nvidia-smi 제품명과 대조, 2026-08-11)
+	"10de:20b7": "a30", // k8s-worker1 0000:18:00.0 (nvidia-smi 제품명과 대조)
+	"10de:25b6": "a2",  // k8s-worker1 0000:86:00.0 (nvidia-smi 제품명과 대조)
 }
 
 // productFromPCI 는 sysfsRoot/<addr> 의 vendor·device ID 로 제품명을 찾는다.

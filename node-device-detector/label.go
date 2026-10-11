@@ -1,12 +1,8 @@
 // ============================================================
-// label.go: node-agent NFD/GFD 라벨링 능력 (S2-6/S3-3)
-// 상세: Snapshot 으로부터 kcloud.ai/* (드라이버·product·count) + NFD 계열 pci-present
-//
-//	라벨을 계산해 노드에 patch 한다. kcloud.ai/* 는 add/update/remove 재조정,
-//	NFD 네임스페이스(feature.node.kubernetes.io) pci-present 는 add/update-only
-//	(실제 NFD 와 충돌 회피). ⚠️ node get/patch RBAC 필요 — helm 반영은 Phase 2.
-//
-// 생성일: 2026-07-16 | 수정일: 2026-08-12
+// label.go: node-agent NFD/GFD 라벨링 능력
+// 상세: Snapshot 으로부터 kcloud.ai/* 와 NFD pci-present 라벨을 계산해 노드에 patch 한다.
+// kcloud.ai/* 는 완전 재조정(add/update/remove)하고, NFD 는 충돌 회피를 위해 add/update-only 다.
+// 생성일: 2026-07-16 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -32,11 +28,9 @@ var detectorLabelSuffixes = []string{".present", ".count", ".product", ".loaded"
 
 // detectorOwns 는 이 키를 detector 가 만들 수 있는지 본다.
 //
-// 소유를 "내가 붙인 이름표 목록"이 아니라 "내가 만들 수 있는 이름 모양"으로 정의한다.
-// 목록 방식은 operator 가 kcloud.ai/* 에 새 라벨을 더할 때마다 여기 등록해야 하고, 빠뜨리면
-// 그 라벨이 다음 스캔에 지워진다 — 두 번 겪었다. 2026-08-04 에는 mig-active 가 약 8초 만에
-// 걷혀 MIG 파티션이 광고되지 못했고, 2026-08-10 에는 dra-owned 가 25초마다 걷혀 광고 주체
-// 전환이 되돌아갔다. 모양으로 가르면 새 라벨은 등록 없이도 살아남는다.
+// 소유를 "내가 붙인 이름표 목록"이 아니라 "내가 만들 수 있는 이름 모양"으로 정의한다. 목록
+// 방식은 새 라벨마다 여기 등록해야 하고, 빠뜨리면 다음 스캔에 지워진다 — 실제로 두 번
+// 일어났다(mig-active, dra-owned). 모양으로 가르면 새 라벨은 등록 없이도 살아남는다.
 func detectorOwns(key string) bool {
 	if !strings.HasPrefix(key, labelPrefix) {
 		return false
@@ -63,7 +57,7 @@ var vendorPciID = map[string]string{
 }
 
 // computeLabels 는 Snapshot 으로부터 부착할 관리 라벨 집합을 계산한다(순수 함수).
-// GFD memory/compute-capability 는 sysfs 원천 미확보(Q5) 시 생략한다(오탐 방지).
+// GFD memory/compute-capability 는 sysfs 원천 미확보 시 생략한다(오탐 방지).
 func computeLabels(snap *Snapshot) map[string]string {
 	labels := map[string]string{}
 	if snap == nil || len(snap.Devices) == 0 {
@@ -101,25 +95,11 @@ func computeLabels(snap *Snapshot) map[string]string {
 		}
 		counts[key] += int(d.count)
 	}
-	// GFD 계열 — product/count (벤더 키별)
-	//
-	// `<벤더>.product` 라벨은 detect() 의 벤더 단위 집계값이라 NVIDIA 에서 "generic" 으로
-	// 남는다. NDR status.devices[].model 은 이와 갈라진다 — report.go 가 PCI 주소마다
-	// productFromPCI 를 태워 실제 제품명(a30 / geforce-gtx-970)을 싣기 때문이다.
-	// **정본은 NDR 쪽 per-device model 이다.** 라벨은 벤더 단위 존재 표시로만 읽어야 한다.
-	//
-	// 이 갈라짐을 라벨 쪽으로 맞추지 않은 이유는 셋이다.
-	//  ① detect() 는 벤더당 Detected 하나에 count=N 을 담는다. k8s-worker1 은 A30 과 A2 를
-	//     함께 꽂고 있어(pciid.go 실측 표) 단일 문자열로는 어느 쪽을 적어도 나머지 카드에
-	//     대해 거짓이 된다. 라벨은 값을 하나만 담을 수 있으므로 이 형태로는 정합이 불가능하다.
-	//  ② "generic" 은 소비자 쪽에서 부하를 지는 표식이다 — upgrade.deviceModelMatches 와
-	//     controller.findPolicy 는 "generic" 을 폴백 매칭 신호로 쓰고,
-	//     partition/nvidia 의 MIG capability 판정은 "generic" 을 "모른다" 로 읽어
-	//     fail-closed 한다. 라벨 값을 제품명으로 바꾸면 이 폴백들이 조용히 무동작이 된다.
-	//  ③ sanitizeLabelValue 는 63자에서 조용히 자른다. 표준 DB 의 최장 NVIDIA 이름은
-	//     75자라 잘린 값이 라벨에 실릴 수 있다.
-	// ponytail: 갈라진 채로 둔다. 제품명을 라벨에도 실으려면 Detected 를 카드 단위로
-	// 쪼개고 소비자 쪽 "generic" 폴백을 함께 걷어내야 한다 — 그건 별도 작업이다.
+	// GFD 계열 — product/count. `<벤더>.product` 는 detect() 의 집계값이라 NVIDIA 에서 "generic"
+	// 으로 남는다(정본은 report.go 의 per-device model). 모델이 섞이면(A30+A2) 값 하나로 못 담고,
+	// "generic" 은 upgrade.deviceModelMatches·controller.findPolicy·partition/nvidia 의 폴백
+	// 신호로 쓰이며, sanitizeLabelValue 가 63자에서 잘라 표준 DB 최장 이름(75자)은 실으면 잘린다.
+	// ponytail: 갈라진 채로 둔다 — 제품명을 실으려면 Detected 를 카드 단위로 쪼개고 소비자 폴백도 걷어내야 한다.
 	for _, key := range order {
 		labels[labelPrefix+key+".count"] = strconv.Itoa(counts[key])
 		if products[key] != "" {
@@ -159,7 +139,7 @@ func sanitizeLabelValue(s string) string {
 
 // Label 은 계산된 관리 라벨을 노드에 반영한다(MergeFrom patch).
 // kcloud.ai/* 는 desired 로 완전 재조정(add/update/remove), NFD pci-present 는 add/update-only.
-// ⚠️ node get/patch RBAC 필요(Phase 2 helm 에서 npu-detector-role 확대). 미부여 시 patch 는 실패한다.
+// ⚠️ node get/patch RBAC 필요(npu-detector-role 확대 필요). 미부여 시 patch 는 실패한다.
 func Label(ctx context.Context, c client.Client, snap *Snapshot) error {
 	node := &corev1.Node{}
 	if err := c.Get(ctx, client.ObjectKey{Name: snap.Node}, node); err != nil {

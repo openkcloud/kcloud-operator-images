@@ -1,10 +1,8 @@
 # ============================================================
 # publish-bundle.yml: release-bundle.yaml 의 한 묶음을 이미지마다 별도 job 으로 발행한다.
-# 상세: `bundle/<묶음 이름>` 태그 push 가 트리거다(예: bundle/2026-10-03). 준비 job 이
-#       목록을 읽어 matrix 를 만들고 발행 job 이 그 matrix 로 전개된다. 빌드 경로·
-#       Dockerfile·기본 build-arg·태그 중복 거절은 publish-image.yml 과 같은 규율이다.
-#       한 이미지만 올릴 때는 publish-image.yml 을 그대로 쓴다.
-# 생성일: 2026-10-03
+# 상세: `bundle/<묶음 이름>` 태그 push 가 트리거다. 준비 job 이 목록을 읽어 matrix 를 만들고
+#       발행 job 이 전개한다. 빌드 경로·Dockerfile·build-arg·태그 중복 거절은 publish-image.yml 과 같다.
+# 생성일: 2026-10-03 | 수정일: 2026-10-11
 # ============================================================
 name: Publish bundle
 

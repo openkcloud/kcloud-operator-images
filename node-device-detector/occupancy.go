@@ -1,15 +1,9 @@
 // ============================================================
 // occupancy.go: node-agent PE 점유 수집 (Furiosa RNGD, 무특권 sysfs)
-// 상세: /sys/class/rngd_mgmt/rngd!npu<N>mgmt/pe_occupancy 는 PE 당 한 줄로 0/1 을
-//
-//	노출한다(실측 8줄 = 8 PE). 이를 점유 수/전체 수로 집계해 metrics 가
-//	kcloud_device_pe_occupancy 로 방출한다. 파일은 0444 라 특권이 필요 없다.
-//	Warboy 의 pe_status(0x3 비트마스크)는 "존재/활성" 의미가 확정되지 않아 제외한다
-//	(추정으로 사용률을 만들지 않는다). 설계 §D3 후속 단계.
-//	mgmt 노드의 device 링크는 /sys/devices/virtual/... 로 PCI 가 없으므로 라벨은
-//	PCI 대신 device 이름(npu0)을 쓴다.
-//
-// 생성일: 2026-07-29 | 수정일: 2026-07-29
+// 상세: rngd_mgmt 의 pe_occupancy 는 PE 당 한 줄(0/1)이고 0444 라 특권이 필요 없다. mgmt 노드는
+// PCI 가 없어 라벨에 device 이름(npu0)을 쓴다. Warboy pe_status 는 의미 미확정이라 추정하지
+// 않고 제외한다.
+// 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package main
 

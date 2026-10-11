@@ -1,10 +1,8 @@
 // ============================================================
 // main.go: 일반 device-plugin 기동
-// 상세: 설정을 읽고 gRPC 소켓을 열어 kubelet 에 등록한다. kubelet 이 재시작하면
-//
-//	소켓이 지워지므로 감시해 다시 등록한다.
-//
-// 생성일: 2026-08-11 | 수정일: 2026-09-20
+// 상세: 설정을 읽고 gRPC 소켓을 열어 kubelet 에 등록한다. kubelet 재시작으로 소켓이
+// 지워지면 감시해 다시 등록한다.
+// 생성일: 2026-08-11 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -80,8 +78,8 @@ func main() {
 // register 는 kubelet 에 이 플러그인을 알린다.
 //
 // pluginapi.KubeletSocket 은 이미 전체 경로다("/var/lib/kubelet/device-plugins/kubelet.sock").
-// pluginDir 과 Join 하면 경로가 두 번 붙는다 - 2026-08-10 계획 작성 중 실제로 그렇게 썼다가
-// 상수를 열어 보고 잡았다. 디렉터리를 바꿔야 하면 여기서 파일명만 다시 붙인다.
+// pluginDir 과 그대로 Join 하면 경로가 두 번 붙는다 — KubeletSocket 이 이미 전체 경로이기 때문이다.
+// 그래서 filepath.Base 로 파일명만 뽑아 쓴다. 디렉터리를 바꿔야 하면 여기서 파일명만 다시 붙인다.
 func register(sock, resourceName, pluginDir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

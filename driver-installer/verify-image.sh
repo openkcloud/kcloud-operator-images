@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 # verify-image.sh: driver-ds image 의 driver version label 검증 (R5 차단)
-# 상세: docker pull 후 LABEL "ai.npu.driver.full" 가 기대값과 일치하는지 확인.
-#       legacy image (label 없음) 는 graceful warning, hard fail 안 함.
-#       사용 예:
-#         bash verify-image.sh nvidia 590.48.01-v17                   # tag 에서 -v 접미사 자동 제거
-#         bash verify-image.sh nvidia 590.48.01-v17 590.48.01         # expected 명시
-#         REGISTRY=<사내 미러>/kcloud bash verify-image.sh furiosa 2.0.0-v3
-# 생성일: 2026-04-28 | 수정일: 2026-09-09
+# 상세: docker pull 후 image LABEL "ai.npu.driver.full" 가 기대값과 일치하는지 확인한다.
+#       레이블이 없는 legacy image 는 경고만 내고 통과시킨다. 사용법은 usage() 참조.
+# 생성일: 2026-04-28 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 

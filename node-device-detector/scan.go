@@ -1,11 +1,8 @@
 // ============================================================
 // scan.go: 노드 디바이스 스캔 능력 (PCI/드라이버/벤더 감지 → Snapshot)
-// 상세: 5벤더(NVIDIA/Furiosa Warboy/RNGD/Rebellions/Tenstorrent) PCI·드라이버
-//
-//	감지 로직 + 공통 호스트 FS 헬퍼. node-agent 의 scan 모듈로, 매 주기 1회
-//	스캔하여 Snapshot 을 만들고 report/validate 등 소비자가 공유한다.
-//
-// 생성일: 2026-03-25 | 수정일: 2026-09-09
+// 상세: 5벤더(NVIDIA/Furiosa Warboy/RNGD/Rebellions/Tenstorrent) PCI·드라이버 감지 로직 +
+// 공통 호스트 FS 헬퍼. 매 주기 1회 스캔해 Snapshot 을 만들고 소비자가 공유한다.
+// 생성일: 2026-03-25 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -103,17 +100,12 @@ func containsFold(list []string, s string) bool {
 	return false
 }
 
-// bindingSummary: 주어진 벤더 매칭 함수(match)에 해당하는 PCI 장치를 순회하며
-// 드라이버 바인딩 현황을 벤더 무관하게 집계한다. pciDriverBound 를 재사용한다.
+// bindingSummary: 주어진 벤더 매칭 함수(match)에 해당하는 PCI 장치의 드라이버 바인딩 현황을
+// 집계한다(pciDriverBound 재사용). total=매칭 장치 수, vfio=vfio-pci 바인딩 수(패스스루 예약),
+// own=ownDrivers 바인딩 수(자기 벤더), free=그 외(미바인딩·타 드라이버·링크 없음 포함).
 //
-//	total : match 에 해당하는 장치 수
-//	vfio  : vfio-pci 에 바인딩된 수(패스스루 예약)
-//	own   : ownDrivers 중 하나에 바인딩된 수(자기 벤더 드라이버)
-//	free  : 그 외(미바인딩/타 드라이버, PCI driver 링크 없음 포함)
-//
-// ⚠️ NPU 드라이버는 표준 PCI driver 로 붙지 않아 /sys/.../driver 링크가 없을 수
-// 있으며, 그 경우 own 이 아닌 free 로 분류된다. 최종 표시 문자열은
-// driverBinding() 에서 driverLoaded(module 존재)로 보완한다.
+// ⚠️ NPU 드라이버는 표준 PCI driver 로 안 붙어 링크가 없을 수 있다 — 그 경우 free 로 분류되고,
+// driverBinding() 이 driverLoaded(module 존재)로 보완한다.
 func bindingSummary(match func(addr, v, d, cls string) bool, ownDrivers []string) (total, vfio, own, free int) {
 	entries, _ := os.ReadDir(H(hostSysPciDevices))
 	for _, e := range entries {
@@ -141,14 +133,10 @@ func bindingSummary(match func(addr, v, d, cls string) bool, ownDrivers []string
 	return
 }
 
-// driverBinding: 벤더 device 의 대표 바인딩 문자열을 계산한다(벤더 무관).
-//
-//	전량 vfio → "vfio-pci", 전량 자기드라이버 → ownName,
-//	vfio+own 혼재 → "mixed", 일부 vfio → "mixed", own 바인딩 존재 → ownName,
-//	PCI 링크는 없지만 module 로드됨(loaded=true) → ownName(NPU 오탐 방지),
-//	그 외(장치 없음/미로드) → "none".
-//
-// loaded=false 로 호출하면 기존 nvidiaDriverBinding 과 완전히 동일한 결과를 낸다.
+// driverBinding: 벤더 device 의 대표 바인딩 문자열을 계산한다(벤더 무관). 전량 vfio →
+// "vfio-pci", 전량 자기드라이버 → ownName, vfio+own 혼재나 일부 vfio → "mixed", own 바인딩
+// 존재 → ownName, PCI 링크 없이도 module 로드됨(loaded=true) → ownName(NPU 오탐 방지),
+// 그 외 → "none". loaded=false 로 호출하면 nvidiaDriverBinding 과 동일한 결과를 낸다.
 func driverBinding(ownName string, total, vfio, own int, loaded bool) string {
 	if total == 0 {
 		return "none"
@@ -248,10 +236,10 @@ func nvidiaSmiPresent() bool {
 	return false
 }
 
-// migLgip 은 `nvidia-smi mig -lgip` 원문을 반환한다(NVIDIA MIG profile discovery 소스, ACPP §4.2).
+// migLgip 은 `nvidia-smi mig -lgip` 원문을 반환한다(ACPP 의 MIG profile discovery 소스).
 // nvidia-smi 부재, 또는 MIG 미지원 GPU 의 비-0 exit 등 어떤 실패든 조용히 "" 를 반환한다(best-effort).
 // 전역(노드 전체) 수집이라 다중 GPU 노드에서 GPU 별 상태가 뒤섞일 수 있다 — per-PCI 관측은
-// observeMig 를 쓴다(Task 2, spec §15.3). buildDevices 가 PCI 를 못 찾을 때만 폴백으로 남긴다.
+// observeMig 를 쓴다. buildDevices 가 PCI 를 못 찾을 때만 폴백으로 남긴다.
 func migLgip() string {
 	if !nvidiaSmiPresent() {
 		return ""
@@ -280,13 +268,11 @@ var hostLoaderCandidates = []string{
 // hostLibraryPath 는 host 바이너리가 필요로 하는 공유 라이브러리 경로다(libnvidia-ml 포함).
 const hostLibraryPath = "/host/usr/lib/x86_64-linux-gnu:/host/usr/lib64:/host/usr/lib"
 
-// hostCommand 는 host 바이너리 실행 커맨드를 만든다.
-//
-// distroless 이미지에는 동적 링커가 없어 host 바이너리를 그대로 exec 하면
-// "fork/exec …: no such file or directory" 가 난다 — 파일이 없다는 뜻이 아니라 ELF 인터프리터를
-// 못 찾았다는 뜻이다. 그래서 nvidia-smi 가 host 에 멀쩡히 있는데도 MIG 관측이 통째로 실패했다
-// (2026-07-24 이후 미해결, 2026-08-04 라이브에서 근거 수집을 막은 원인). host 의 링커에 host
-// 라이브러리 경로를 주어 대신 실행한다. 링커를 못 찾으면 기존처럼 직접 실행한다.
+// hostCommand 는 host 바이너리 실행 커맨드를 만든다. distroless 이미지에는 동적 링커가 없어
+// host 바이너리를 그대로 exec 하면 "fork/exec …: no such file or directory" 가 난다 — 파일이
+// 없다는 뜻이 아니라 ELF 인터프리터를 못 찾았다는 뜻이라, nvidia-smi 가 host 에 있어도 MIG
+// 관측이 통째로 실패한다. host 의 링커에 라이브러리 경로를 주어 대신 실행하고, 링커를 못
+// 찾으면 기존처럼 직접 실행한다.
 func hostCommand(ctx context.Context, bin string, args ...string) *exec.Cmd {
 	for _, ld := range hostLoaderCandidates {
 		if !hostExists(ld) {
@@ -308,7 +294,7 @@ func runNvidiaSmi(timeout time.Duration, args ...string) (string, error) {
 	return string(out), err
 }
 
-// MigObservation 은 단일 GPU(PCI)의 MIG 관측 결과다(fail-closed, spec §15.3).
+// MigObservation 은 단일 GPU(PCI)의 MIG 관측 결과다(fail-closed).
 type MigObservation struct {
 	ModeCurrent, ModePending, Geometry, LgipOutput, Err string
 }
@@ -332,7 +318,7 @@ func normalizeMode(s string) string {
 // "MIG 1g.6gb+me" 같은 +me 변형도 매칭(접미사는 무시).
 var migProfileLineRe = regexp.MustCompile(`MIG\s+(\d+g\.\d+gb)`)
 
-// parseMigObservation 은 fail-closed 로 관측을 판정한다(§15.3): mode csv 파싱 실패, current
+// parseMigObservation 은 fail-closed 로 관측을 판정한다: mode csv 파싱 실패, current
 // Unknown, pending Unknown, 또는 Enabled 인데 -lgi 를 파싱 못하면 전부 Unknown+Err 를 반환하고
 // 절대 조용히 "disabled" 로 보고하지 않는다.
 func parseMigObservation(modeCsv, lgi, lgip string) MigObservation {
@@ -391,7 +377,7 @@ func summarizeMigGeometryStrict(lgi string) (string, error) {
 }
 
 // observeMig 는 지정 PCI 주소의 GPU 하나에 대해 mode/-lgi/-lgip 를 각각 조회하고
-// fail-closed 로 판정한다(spec §14.1/§15.3). nvidia-smi 부재 또는 pci 공란이면
+// fail-closed 로 판정한다. nvidia-smi 부재 또는 pci 공란이면
 // 즉시 Unknown+Err(조회 자체를 시도하지 않음 — 안전하게 타겟할 수 없는 GPU).
 func observeMig(pci string) MigObservation {
 	if !nvidiaSmiPresent() || pci == "" {
@@ -451,16 +437,10 @@ var vendorPciMatchers = map[string]func(addr, v, d, cls string) bool{
 
 // vendorPciAddrs 는 벤더별 PCI 주소 목록을 1회 스캔으로 모은다(Snapshot 단일 소스).
 //
-// NVIDIA 만 주소를 남기던 시절, 나머지 벤더의 NDR entry 는 pcieAddress 가 비어 있었다. 그 탓에
-// 소비자(operator)에서 두 가지가 깨졌다 — ①rngd backend 의 deviceID() 가 PCI 부재 시 model 로
-// 폴백해 한 노드의 RNGD 카드가 전부 같은 ID("rngd")로 뭉갰다 ②intent.ApplyHealth 의 장치 단위
-// 제외가 PCI 를 키로 삼아, PCI 없는 장치는 개별 제외가 원천 불가였다(2026-08-04 라이브 실측:
-// warboy/rngd/tenstorrent 전부 pcie 공란).
-//
-// 열거 자체는 드라이버 바인딩과 무관하다. bindingSummary 의 경고(NPU 드라이버가 표준 PCI
-// driver 로 안 붙어 /sys/.../driver 링크가 없을 수 있음)는 "어느 드라이버에 붙었나" 의 문제고,
-// 여기서 읽는 vendor/device/class 는 PCI 코어가 채우므로 드라이버가 없어도 존재한다.
-// (2026-08-04 실측으로도 worker1 npu_pdma·rngd-1 furiosa_rngd·worker3 tenstorrent 모두 정상 바인딩.)
+// NVIDIA 만 주소를 남기면 나머지 벤더의 NDR entry 는 pcieAddress 가 비어, rngd backend 의
+// deviceID() 가 model 폴백으로 카드를 뭉개고 intent.ApplyHealth 가 장치별 제외를 못 한다
+// (report.go buildDevices 와 같은 문제). 열거는 드라이버 바인딩과 무관하다 — vendor/device/class
+// 는 PCI 코어가 채우므로 드라이버가 안 붙어도 존재한다.
 func vendorPciAddrs() map[string][]string {
 	out := make(map[string][]string, len(vendorPciMatchers))
 	for key, match := range vendorPciMatchers {
@@ -482,7 +462,7 @@ var (
 		{Vendor: "0x1ed2", Device: "0x0001"}, // RNGD
 	}
 	// Tenstorrent Blackhole PCI IDs
-	// 0xb140 은 k8s-worker3 sysfs 실측값(2026-08-04, /sys/bus/pci/devices/0000:af:00.0).
+	// 0xb140 은 k8s-worker3 sysfs 실측값(/sys/bus/pci/devices/0000:af:00.0).
 	// 0xb150 은 확인 못 한 placeholder 로 남긴다 — matchTenstorrent 가 벤더 ID 만으로
 	// 매칭하므로 목록 누락이 감지 실패로 이어지지는 않는다.
 	builtinTenstorrentIDs = []PciID{
@@ -514,18 +494,11 @@ var (
 	rebellionsVendorID  = "0x1eff"
 	tenstorrentVendorID = "0x1e52"
 	reSemverish         = regexp.MustCompile(`^[0-9]+(\.[0-9A-Za-z\-]+)+$`)
-	// NVRM 라인의 "Kernel Module" 다음 버전 명시 매칭 (2-component 580.142 / 3-component 525.x.y 모두 허용).
-	// 기존 패턴은 3-component 강제라 580.142 매칭 실패 → fallback reAnyVer 가 GCC 줄 11.4.0 잡는 회귀.
-	//
-	// 두 번째 회귀(2026-08-06, .93 A30 595.84 실측): open kernel module 은 "Kernel Module" 과
-	// 버전 사이에 아키텍처 토큰이 낀다.
-	//   프로프라이어터리: "NVIDIA UNIX x86_64 Kernel Module  580.159.03"
-	//   open:            "NVIDIA UNIX Open Kernel Module for x86_64  595.84"
-	// 후자는 매칭 실패 → 같은 fallback 이 GCC 줄의 11.4.0 을 다시 집었다. 그 값이 드라이버
-	// 버전으로 보고되면 업그레이드 상태기계가 "교체 필요" 로 읽고 노드를 cordon 한 뒤
-	// 없는 이미지(nvidia-driver-ds:11.4.0-...)를 받으려다 고착된다. R560+ 데이터센터
-	// 드라이버가 open module 기본이라 신규 노드 전반이 대상이다.
-	// 따라서 "Kernel Module" 뒤에 오는 단어 토큰(x86_64 처럼 숫자를 품어도 됨)을 건너뛴다.
+	// NVRM 라인의 "Kernel Module" 다음 버전을 매칭한다(2-component 580.142 / 3-component 525.x.y
+	// 모두 허용, 아키텍처 토큰(x86_64 등)은 건너뛴다 — open kernel module 은 "...for x86_64
+	// 595.84" 처럼 토큰이 낀다. 못 맞으면 fallback reAnyVer 가 같은 줄의 GCC 컴파일러 버전을
+	// 잘못 집어, 그 값이 보고되면 업그레이드 상태기계가 cordon 하고 없는 이미지 태그를
+	// 받으려다 고착된다.
 	reNvrmVer = regexp.MustCompile(
 		`NVRM version:.*?Kernel Module\s+(?:[A-Za-z][\w\-]*\s+)*([0-9]+(?:\.[0-9]+)+)`)
 	// 2-component 이상 허용 — /sys/module/nvidia/version 은 "595.84" 처럼 2-component 로만
@@ -693,8 +666,8 @@ func furiosaPkgSummaryFromStatus() (driverVer string, detail string) {
 }
 
 // nvidiaOnDiskVersion 는 설치된(디스크) nvidia 드라이버 패키지 버전을 dpkg status 에서 뽑는다.
-// 디스크 버전 = 재부팅 후 로드될 버전이므로 로드된 모듈 버전(/proc)과 다르면 대역외 드리프트다
-// (2026-09-17 사고 형태). 반환은 숫자형(예 "580.178.04"). 파싱 불가·미설치·.run 설치면 "".
+// 디스크 버전 = 재부팅 후 로드될 버전이므로 로드된 모듈 버전(/proc)과 다르면 대역외 드리프트다.
+// 반환은 숫자형(예 "580.178.04"). 파싱 불가·미설치·.run 설치면 "".
 func nvidiaOnDiskVersion() string {
 	data, err := os.ReadFile(H(hostVarDpkgStatus))
 	if err != nil {
@@ -1069,13 +1042,9 @@ func nvidiaPciCount() int {
 	return cnt
 }
 
-// NVIDIA GPU 물리 함수(.0)를 순회하며 드라이버 바인딩 현황을 집계한다.
-// vendor 0x10de & class 0x03(VGA/3D/Display) 인 .0 함수만 대상으로 한다.
-//
-//	total       : 감지된 NVIDIA GPU 물리 함수 수(nvidiaPciCount 와 동일 기준)
-//	vfio        : vfio-pci 에 바인딩된 수(패스스루 예약)
-//	nvidiaBound : nvidia 드라이버에 바인딩된 수
-//	free        : 그 외(미바인딩 또는 nouveau 등 타 드라이버)
+// NVIDIA GPU 물리 함수(.0, vendor 0x10de & class 0x03)를 순회하며 드라이버 바인딩 현황을
+// 집계한다. total=감지된 물리 함수 수(nvidiaPciCount 와 동일 기준), vfio=vfio-pci 바인딩 수
+// (패스스루 예약), nvidiaBound=nvidia 드라이버 바인딩 수, free=그 외(미바인딩/nouveau 등).
 func nvidiaBindingSummary() (total, vfio, nvidiaBound, free int) {
 	return bindingSummary(matchNvidia, []string{"nvidia"})
 }
@@ -1166,7 +1135,7 @@ func parseNvrmVersion(v string) string {
 		return m[1]
 	}
 	// 느슨한 fallback 은 컴파일러 배너 앞까지만 본다. 그 줄에도 버전처럼 생긴 값이 있어
-	// 두 차례(580.142 / 595.84) 모두 여기서 컴파일러 버전이 드라이버 버전으로 둔갑했다.
+	// 컴파일러 버전이 드라이버 버전으로 둔갑하는 회귀가 두 차례(580.142 / 595.84) 난 적이 있다.
 	head := v
 	if i := strings.Index(head, "GCC version"); i >= 0 {
 		head = head[:i]

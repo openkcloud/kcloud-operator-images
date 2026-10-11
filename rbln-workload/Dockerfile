@@ -1,11 +1,10 @@
 # ============================================================
 # Dockerfile: rbln-workload — node5 호스트 rebel SDK 를 hostPath 로 쓰는 Ubuntu 22.04 실행 이미지
-# 상세: 벤더 SDK(rebel, pyarmor 보호)는 이미지에 담지 않는다. 호스트(Ubuntu 22.04, glibc 2.35,
-#       python 3.10)의 dist-packages 를 hostPath 로 마운트해 PYTHONPATH 로 읽고, 이 이미지는
-#       같은 glibc 의 python3.10 과 네이티브 의존 라이브러리만 제공한다. 다른 base(glibc 2.41)
-#       에서는 create_runtime 이 SIGSEGV 로 죽는 문제를 피하기 위한 이미지다. 시스템 라이브러리
-#       목록은 node5 `/etc/cdi/rbln.yaml`(벤더 CDI 스펙)이 컨테이너에 요구하는 것과 맞춘다.
-# 생성일: 2026-09-29
+# 상세: 벤더 SDK(rebel, pyarmor 보호)는 이미지에 안 담고 호스트(Ubuntu 22.04, glibc 2.35, python
+#       3.10)의 dist-packages 를 hostPath 로 쓴다. 다른 glibc(2.41)에서는 create_runtime 이
+#       SIGSEGV 로 죽는다. 시스템 라이브러리 목록은 대상 노드의 `/etc/cdi/rbln.yaml`(벤더 CDI
+#       스펙)이 요구하는 것과 맞춘다.
+# 생성일: 2026-09-29 | 수정일: 2026-10-11
 # ============================================================
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1

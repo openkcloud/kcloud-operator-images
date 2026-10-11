@@ -1,11 +1,8 @@
 // ============================================================
 // scan_test.go: 스캔 헬퍼 단위 테스트
-// 상세: migLgip() 의 nvidia-smi 부재 경로(CI, 회귀 0) 검증 + parseMigObservation
-//
-//	fail-closed 판정(Task 2, spec §15.3) 단위 테스트. 픽스처는 worker1 A30(nvidia-smi
-//	580 계열) 실측 원문 형식을 인라인 문자열로 사용한다.
-//
-// 생성일: 2026-07-23 | 수정일: 2026-08-05
+// 상세: migLgip() 의 nvidia-smi 부재 경로(CI) 검증 + parseMigObservation 의 fail-closed
+// 판정 단위 테스트. 픽스처는 worker1 A30(nvidia-smi 580 계열) 실측 원문 형식을 쓴다.
+// 생성일: 2026-07-23 | 수정일: 2026-10-11
 // ============================================================
 package main
 
@@ -46,15 +43,10 @@ func fakeSysfsPci(t *testing.T) string {
 	return root
 }
 
-// 다중 카드 비-NVIDIA 노드에서 벤더별 주소가 섞이지 않고 정렬되어 나오는지 본다.
-// 픽스처 값은 2026-08-04 sysfs 실측이다:
-//
-//	worker1 Warboy   0000:af:00.0  1ed2:0000  class 0x120000  driver npu_pdma
-//	rngd-1  RNGD     0000:27:00.0  1ed2:0001  class 0x120000  driver furiosa_rngd
-//	worker3 Blackhole 0000:af:00.0 1e52:b140  class 0x120000  driver tenstorrent
-//
-// Warboy 와 RNGD 는 벤더 ID 가 같아 device ID 로만 갈린다 — 한 노드에 섞이면 서로의 주소를
-// 가져가면 안 된다. Warboy 2번째 카드는 실물이 없어 같은 시그니처로 합성했다.
+// 다중 카드 비-NVIDIA 노드에서 벤더별 주소가 섞이지 않고 정렬되어 나오는지 본다. 픽스처
+// 값은 sysfs 실측이다(worker1 Warboy 1ed2:0000, rngd-1 RNGD 1ed2:0001, worker3 Blackhole
+// 1e52:b140, 전부 class 0x120000). Warboy 와 RNGD 는 벤더 ID 가 같아 device ID 로만 갈린다.
+// Warboy 2번째 카드는 실물이 없어 같은 시그니처로 합성한다.
 func TestVendorPciAddrs_MultiCardNonNvidia(t *testing.T) {
 	root := fakeSysfsPci(t)
 	fakePciDev(t, root, "0000:af:00.0", "0x1ed2", "0x0000", "0x120000") // Warboy
@@ -212,8 +204,8 @@ func TestObserveMig_AbsentOrEmptyPci(t *testing.T) {
 }
 
 // TestHostCommandUsesHostLoader 는 host 링커가 있으면 그것으로 host 바이너리를 실행하는지 본다.
-// distroless 에는 동적 링커가 없어 직접 exec 하면 ENOENT 가 나고, 그 탓에 nvidia-smi 가 host 에
-// 있는데도 MIG 관측이 통째로 실패했다(2026-08-04 라이브).
+// distroless 에는 동적 링커가 없어 직접 exec 하면 ENOENT 가 나고, nvidia-smi 가 host 에
+// 있어도 MIG 관측이 통째로 실패한다.
 func TestHostCommandUsesHostLoader(t *testing.T) {
 	dir := t.TempDir()
 	old := hostPrefix
@@ -270,7 +262,7 @@ func TestParseNvrmVersion(t *testing.T) {
 		want string
 	}{
 		{
-			// .93 A30 실측(2026-08-06). 회귀 재발 지점.
+			// .93 A30 실측. 회귀 재발 지점.
 			name: "open kernel module",
 			in: "NVRM version: NVIDIA UNIX Open Kernel Module for x86_64  595.84  " +
 				"Release Build  (dvs-builder@U22-I3-AM25-26-2)  Wed Jun 10 21:06:37 UTC 2026" + gcc,

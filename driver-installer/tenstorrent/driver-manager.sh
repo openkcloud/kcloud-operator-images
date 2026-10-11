@@ -3,7 +3,7 @@
 # driver-manager.sh: initContainer에서 실행 — Tenstorrent tt-kmd 커널 모듈 해제
 # 상세: driver-manager initContainer 패턴 (Tenstorrent Blackhole 전용)
 #       버전 변경 감지 시 tenstorrent 모듈 rmmod 후 재설치 경로 열어줌
-# 생성일: 2026-04-22 | 수정일: 2026-09-09
+# 생성일: 2026-04-22 | 수정일: 2026-10-11
 # ============================================================
 set -euo pipefail
 
