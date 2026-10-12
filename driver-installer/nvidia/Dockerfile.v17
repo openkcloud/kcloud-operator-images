@@ -1,7 +1,7 @@
 # ============================================================
-# Dockerfile.v17: NVIDIA driver v17 — containerized install image
-# 상세: 컨테이너 내부에서 nvidia.ko 를 빌드해 host 에 sideload 한다(host namespace 진입 없음).
-#       v16 의 entrypoint.sh 등도 포함해 INSTALL_METHOD=hostnamespace 위임 시 함께 동작한다.
+# Dockerfile.v17: NVIDIA driver v17 설치기 이미지 — 기본은 호스트 설치 위임
+# 상세: 기본 INSTALL_METHOD=hostnamespace 라 entrypoint-v17.sh 가 v16 entrypoint.sh 에 위임해 nsenter 로 호스트에 설치한다.
+#       containerized(컨테이너 안에서 nvidia.ko 를 빌드해 sideload)는 휴면이며, 그 DKMS 빌드 도구는 BUILD_TOOLS=true 빌드에만 든다.
 #       기본 빌드는 NVIDIA 패키지(PREBAKE_DRIVER)와 build-essential·dkms(BUILD_TOOLS)를 담지 않는다.
 #       PPA·software-properties-common 은 BUILD_TOOLS=true 이거나 PREBUILD_KERNEL 빌드일 때만 담는다.
 # 생성일: 2026-04-27 | 수정일: 2026-10-13

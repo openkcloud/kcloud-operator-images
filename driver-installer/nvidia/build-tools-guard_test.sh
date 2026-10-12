@@ -7,7 +7,7 @@
 # 생성일: 2026-10-13 | 수정일: 2026-10-13
 # ============================================================
 set -uo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 fail=0
 grep -qE '^ARG BUILD_TOOLS="?false"?$' Dockerfile.v17 || { echo "FAIL: ARG BUILD_TOOLS=false 가 없다"; fail=1; }
 cond=$(grep -nE 'if \[ "\$\{BUILD_TOOLS\}" = "true" \]' Dockerfile.v17 | head -1 | cut -d: -f1)
