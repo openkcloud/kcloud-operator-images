@@ -2,7 +2,7 @@
 ============================================================
 MIGRATION_v17.md: v16 → v17 NVIDIA driver image 전환 가이드
 상세: containerized install (host immutable) 로의 incremental 전환 방법.
-생성일: 2026-04-27 | 수정일: 2026-10-11
+생성일: 2026-04-27 | 수정일: 2026-10-12
 ============================================================
 -->
 
@@ -27,7 +27,7 @@ MIGRATION_v17.md: v16 → v17 NVIDIA driver image 전환 가이드
 ### 2.1 image 빌드 + push
 
 ```bash
-cd util/driver-installer/nvidia
+cd driver-installer/nvidia
 # KERNEL_VERSION 은 노드 uname -r 값
 docker build \
   --build-arg KERNEL_VERSION="$(uname -r)" \
@@ -37,7 +37,7 @@ docker build \
 docker push <your-registry>/nvidia-driver-ds:590.48.01-v17
 ```
 
-> 이미지 빌드 + push 는 **본 worker 작업 범위 밖**. lead 가 사용자 승인 후 별도 진행.
+> 이미지 빌드 + push 는 이 가이드가 다루는 절차 범위 밖이며, 사용자 승인 후 별도로 진행한다.
 
 ### 2.2 DriverInstallPolicy CR 변경
 
@@ -60,7 +60,7 @@ spec:
 > `installMethod` 필드는 DIP API 가 추후 추가하면 바인딩됨.
 > 당장은 image tag (`-v17`) 만으로 구분 가능.
 
-### 2.3 DS spec 변경 (operator 책임 — worker B 분리)
+### 2.3 DS spec 변경 (operator 책임)
 
 operator 의 `internal/controller/driver_daemonset_controller.go` 가 v17 image label
 (`kcloud.ai/v17.install-method=containerized`) 을 감지하면 다음 마운트를 자동 추가:
@@ -76,7 +76,7 @@ operator 의 `internal/controller/driver_daemonset_controller.go` 가 v17 image 
 
 또한 securityContext 에 `privileged: true`, `capabilities: SYS_MODULE,SYS_ADMIN` 부여 필요.
 
-> 이 변경은 별도 worker B / lead PR 통합 시 처리. 본 worker 산출물 범위 밖.
+> 이 변경은 별도 PR 로 통합 시 처리하며, 이 문서의 산출물 범위 밖이다.
 
 ### 2.4 노드 단위 rolling update
 
