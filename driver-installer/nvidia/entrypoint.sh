@@ -4,7 +4,7 @@
 # 상세: Host namespace(nsenter)에서 GPU 드라이버를 설치하고, MANAGE_CONTAINER_TOOLKIT=true 일
 #       때만 nvidia-ctk·containerd/docker 런타임도 구성한다. 사전 컴파일 모듈이 동봉돼 있으면
 #       정합성을 fail-closed 로 확인한 뒤 DKMS 대신 그 모듈을 host 에 설치한다.
-# 생성일: 2026-04-17 | 수정일: 2026-10-11
+# 생성일: 2026-04-17 | 수정일: 2026-10-13
 # ============================================================
 set -Eeuo pipefail
 [[ "${DEBUG:-0}" == "1" ]] && set -x
@@ -212,7 +212,7 @@ install_driver_pkg_on_host() {
   return 1
 }
 
-# collect_reboot_guard_state: cross-major 재부팅 유예 가드가 읽는 디스크 상태를 TARGET_PKG_OK·
+# collect_reboot_guard_state: 재부팅 유예 가드가 읽는 디스크 상태를 TARGET_PKG_OK·
 #   DISK_MOD_VER·DISK_MOD_MAJOR 전역에 남긴다. 패키지도 모듈도 없는 새 노드(설치 자체가
 #   실패한 가장 흔한 경로)에서는 dpkg-query·modinfo 가 비0 으로 끝나는데, set -Eeuo pipefail
 #   아래서 이 비0 이 보호 없이 올라가면 "All driver candidates failed" 진단(log_error) 전에
@@ -224,21 +224,34 @@ collect_reboot_guard_state() {
   DISK_MOD_MAJOR="${DISK_MOD_VER%%.*}"
 }
 
-# reboot_defer_applicable: cross-major 재부팅 유예 가드. PIN_FAILED 를 첫 조건으로 두는 이유 —
-#   고정 실패 뒤에는 정책이 아닌 버전이 디스크에 있을 수 있어 재부팅을 맡기면 안 된다. 정책
-#   버전이 x.y.z 이면 디스크 모듈이 그 patch 와 정확히 같을 때만 참이다(major 만 적은 정책은
-#   종전대로 major 비교) — 부팅 뒤 검증기(internal/validator/validator.go:117)는 로드된 커널
-#   모듈 버전만 보고 dpkg 메타패키지는 읽지 않는다. 사전 컴파일은 메타패키지를 설치하지 않으므로
-#   그 값은 옛 apt 이력일 뿐이라, 조건에 넣으면 회복 가능한 cross-major 전이가 Failed 로 바뀐다.
+# reboot_defer_applicable: 재부팅 유예 가드(cross-major 전이와 같은 계열 patch 교체). PIN_FAILED 를
+#   첫 조건으로 두는 이유 — 고정 실패 뒤에는 정책이 아닌 버전이 디스크에 있을 수 있다. 정책이
+#   x.y.z 이면 디스크 모듈이 그 patch 와 같고 로드된 모듈이 그 patch 가 아닐 때 참이다(같은 계열
+#   patch 교체 포함). major 만 적은 정책은 로드된 major 가 다를 때 참이다. 부팅 뒤 검증기
+#   (internal/validator/validator.go:117)는 로드된 모듈 버전만 보고 dpkg 메타패키지는 읽지 않는다.
+#   사전 컴파일은 메타패키지를 설치하지 않아 그 값이 옛 apt 이력이므로 조건에 넣지 않는다.
 reboot_defer_applicable() {
   [[ "${PIN_FAILED:-0}" != "1" \
         && -n "${EXPECTED_MAJOR}" && "${TARGET_PKG_OK}" -ge 1 \
-        && "${DISK_MOD_MAJOR}" == "${EXPECTED_MAJOR}" \
-        && "${ACTIVE_MAJOR}" != "${EXPECTED_MAJOR}" ]] || return 1
+        && "${DISK_MOD_MAJOR}" == "${EXPECTED_MAJOR}" ]] || return 1
   if [[ "${DRIVER_VERSION:-}" == *.*.* ]]; then
-    [[ "${DISK_MOD_VER:-}" == "${DRIVER_VERSION}" ]] || return 1
+    [[ "${DISK_MOD_VER:-}" == "${DRIVER_VERSION}" && "${ACTIVE_NVRM:-}" != "${DRIVER_VERSION}" ]]
+    return
   fi
-  return 0
+  [[ "${ACTIVE_MAJOR}" != "${EXPECTED_MAJOR}" ]]
+}
+
+# loaded_needs_reboot <로드된 버전> <정책 버전> <설치 생략 0|1>: 설치 뒤 로드된 모듈이 정책과 달라
+#   재부팅으로만 교체되는지. 정책이 x.y.z 면 전체 버전, major 만이면 major 를 비교한다. 설치를
+#   건너뛴 실행(다운그레이드 가드·동일 버전·Host 채택)은 정책 값이 로드 버전과 다를 수 있어 판정하지 않는다.
+loaded_needs_reboot() {
+  local loaded="$1" want="$2" skipped="$3"
+  [[ "${skipped}" != "1" && "${loaded}" != "unknown" && -n "${loaded}" && -n "${want}" ]] || return 1
+  if [[ "${want}" == *.*.* ]]; then
+    [[ "${loaded}" != "${want}" ]]
+    return
+  fi
+  [[ "${loaded%%.*}" != "${want%%.*}" ]]
 }
 
 # install_from_candidates: DRIVER_CANDIDATES 를 순서대로 시도한다. 결과는 전역에 남긴다 —
@@ -267,13 +280,28 @@ install_from_candidates() {
       if [[ "${cand_rc}" -eq 2 ]]; then
         # 정책 버전 고정 실패 — 계열 최신·수동 지정 후보로 대체하면 정책이 아닌 버전이
         # 조용히 깔린다. 다음 후보로 넘어가지 않고 아래 "모든 후보 실패" 경로로 간다.
-        # PIN_FAILED=1 은 그 경로의 cross-major 재부팅 유예 가드를 건너뛰게 한다.
+        # PIN_FAILED=1 은 그 경로의 재부팅 유예 가드를 건너뛰게 한다.
         log_error "정책 버전 고정 실패 — 남은 후보로 대체하지 않는다"
         PIN_FAILED=1
         break
       fi
     fi
   done
+}
+
+# apply_reboot_defer: 모든 후보가 실패한 뒤 재부팅 유예를 적용한다. 0 = needs-reboot 마커를 남겼다
+#   (호출부가 정상 종료로 재부팅을 위임), 1 = 유예할 수 없거나 rebootStrategy=Never(호출부가
+#   실패로 끝낸다). 종료는 호출부가 정한다 — 단위 시험이 이 함수를 직접 부른다.
+apply_reboot_defer() {
+  reboot_defer_applicable || return 1
+  case "${REBOOT_STRATEGY:-IfNeeded}" in
+    Never)
+      log_error "reboot-deferred(모듈 교체, target ${DRIVER_VERSION:-${EXPECTED_MAJOR}}, active=${ACTIVE_NVRM:-none}) 이나 rebootStrategy=Never — 재부팅 없이 신 모듈 로드 불가 → install 실패"
+      return 1 ;;
+  esac
+  log_warn "reboot-deferred(모듈 교체, target ${DRIVER_VERSION:-${EXPECTED_MAJOR}} 모듈 디스크 준비 완료, active=${ACTIVE_NVRM:-none/broken} — 구 모듈 busy/broken) — needs-reboot 마커 생성 후 정상 종료(reboot 위임)."
+  ns "mkdir -p ${MARKER_DIR}; touch ${MARKER_DIR}/needs-reboot" || true
+  return 0
 }
 
 # 함수 정의만 필요할 때(단위 시험)는 여기서 멈춘다 — 아래 실행부(marker 이관·설치·트랩)를 건너뛴다.
@@ -870,29 +898,21 @@ if [[ "${SKIP_DRIVER_INSTALL:-0}" != "1" ]]; then
   install_from_candidates
 
   if [[ "${INSTALL_SUCCESS}" -ne 1 ]]; then
-    # cross-major 로드 지연은 install 실패가 아니다. 구 major 모듈이 busy(GPU 홀더/refcount)면
+    # 모듈 교체 지연(cross-major·같은 계열 patch)은 install 실패가 아니다. 구 모듈이 busy(GPU 홀더/refcount)면
     # rmmod·신 모듈 modprobe 가 실패해 모든 candidate 가 실패로 보이지만, 타겟 패키지는 이미
     # 설치됐고 신 모듈은 재부팅 후 로드된다. install 실패로 처리하면 needs-reboot 마커가 안 남아
     # operator 의 RebootRequired→reboot 경로가 발화하지 못한다. TARGET_PKG_OK(타겟 설치 완료)·
-    # DISK_MOD_MAJOR/VER(디스크 모듈이 신 버전으로 빌드됨)·ACTIVE_MAJOR(현재 로드 major)·
+    # DISK_MOD_MAJOR/VER(디스크 모듈이 신 버전으로 빌드됨)·ACTIVE_MAJOR/ACTIVE_NVRM(현재 로드 버전)·
     # PIN_FAILED(고정 실패면 가드 skip) 네 신호가 모두 맞으면 마커를 남기고 정상 종료해 재부팅에 위임한다.
     collect_reboot_guard_state
     ACTIVE_NVRM=$(ns "cat /proc/driver/nvidia/version 2>/dev/null" | parse_nvrm_version || echo "")
     ACTIVE_MAJOR="${ACTIVE_NVRM%%.*}"
-    if reboot_defer_applicable; then
-      case "${REBOOT_STRATEGY:-IfNeeded}" in
-        Never)
-          log_error "cross-major reboot-deferred(target ${EXPECTED_MAJOR} 모듈 준비됨, active=${ACTIVE_MAJOR:-none}) 이나 rebootStrategy=Never — 재부팅 없이 신 모듈 로드 불가 → install 실패"
-          exit 1 ;;
-        *)
-          log_warn "cross-major reboot-deferred(target ${EXPECTED_MAJOR} 모듈 디스크 준비 완료, 현재 active=${ACTIVE_MAJOR:-none/broken} — 구 모듈 busy/broken) — needs-reboot 마커 생성 후 정상 종료(reboot 위임)."
-          ns "mkdir -p ${MARKER_DIR}; touch ${MARKER_DIR}/needs-reboot" || true
-          if [ "${RUN_MODE}" = "job" ]; then
-            log_info "RUN_MODE=job — cross-major reboot-deferred, install Job 정상 종료(exit 0)"
-            exit 0
-          fi
-          exec sleep infinity ;;
-      esac
+    if apply_reboot_defer; then
+      if [ "${RUN_MODE}" = "job" ]; then
+        log_info "RUN_MODE=job — reboot-deferred(모듈 교체), install Job 정상 종료(exit 0)"
+        exit 0
+      fi
+      exec sleep infinity
     fi
     # ------------------------------------------------------------------------------------------
     log_error "All driver candidates failed; please inspect DKMS logs above."
@@ -1056,22 +1076,19 @@ ns "echo ${INSTALLED_VER} > ${MARKER_DIR}/nvidia.ok"
 
 log_info "NVIDIA driver installation completed successfully (runtime 설정은 toolkit DS 소유)."
 
-# --- S2-5 WP-R2: cross-major 재부팅 마커 (job/daemonset 공통) ------------------
-# 설치는 성공했으나 구 모듈이 rmmod 실패로 물려 있으면(로드 major != 설치 타겟 major),
-# 새 모듈은 재부팅 후에만 로드된다 → detector(WP-R1)가 read 할 needs-reboot 마커를 남긴다.
-# same-major 재설치는 rmmod/재로드로 수렴하므로 대상 아님(불필요 재부팅 방지).
-LOADED_MAJOR="${INSTALLED_VER%%.*}"   # /proc = 현재 로드된 모듈
-TARGET_MAJOR="${DRIVER_VERSION%%.*}"  # env = Job 이 설치한 타겟
-if [[ "${INSTALLED_VER}" != "unknown" && -n "${DRIVER_VERSION}" && "${LOADED_MAJOR}" != "${TARGET_MAJOR}" ]]; then
+# --- 재부팅 마커 (job/daemonset 공통) ---------------------------------------
+# 설치는 성공했으나 구 모듈이 물려 있으면(로드 버전 != 설치 타겟) 새 모듈은 재부팅 뒤에만 로드된다.
+# detector 가 읽는 needs-reboot 마커를 남긴다. 같은 계열 patch 교체도 대상이다.
+if loaded_needs_reboot "${INSTALLED_VER}" "${DRIVER_VERSION:-}" "${SKIP_DRIVER_INSTALL:-0}"; then
   case "${REBOOT_STRATEGY:-IfNeeded}" in
     Never)
-      log_warn "cross-major 모듈 stuck(loaded ${LOADED_MAJOR} != target ${TARGET_MAJOR}) — rebootStrategy=Never, 마커 생략" ;;
+      log_warn "모듈 교체 대기(loaded ${INSTALLED_VER} != target ${DRIVER_VERSION}) — rebootStrategy=Never, 마커 생략" ;;
     *)
-      log_warn "cross-major 모듈 stuck(loaded ${LOADED_MAJOR} != target ${TARGET_MAJOR}) — needs-reboot 마커 생성(재부팅 후 신 모듈 로드)"
+      log_warn "모듈 교체 대기(loaded ${INSTALLED_VER} != target ${DRIVER_VERSION}) — needs-reboot 마커 생성(재부팅 후 신 모듈 로드)"
       ns "mkdir -p ${MARKER_DIR}; touch ${MARKER_DIR}/needs-reboot" || true ;;
   esac
 else
-  # major 일치(신 모듈 정상 로드) → stale needs-reboot 마커 제거(재부팅 후 재실행 시 수렴).
+  # 로드 버전이 타겟과 같거나 설치를 건너뛰었다 → 남은 needs-reboot 마커 제거(재부팅 후 재실행 시 수렴).
   # ponytail: 재부팅 후 수렴은 operator 가 handleRebooting→install 재실행(entrypoint 재진입)으로
   #   마커를 지우는 흐름 전제. E2E(동결 해제 후)에서 최종 확정.
   ns "rm -f ${MARKER_DIR}/needs-reboot 2>/dev/null" || true

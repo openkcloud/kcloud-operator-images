@@ -4,7 +4,7 @@
 # 상세: 발행 이미지는 Dockerfile.v17 의 INSTALL_METHOD=hostnamespace 로 이 경로를 탄다. ns·
 #       apt_wait 를 가짜 함수로 두고 실제 install_driver_pkg_on_host 를 source 해 부른다
 #       (복사본이 아니다). docker·컨테이너·host 접촉 없이 도는 순수 bash 시험이다.
-# 생성일: 2026-10-06 | 수정일: 2026-10-11
+# 생성일: 2026-10-06 | 수정일: 2026-10-13
 # ============================================================
 # shellcheck disable=SC2034
 # 파일 전체에 적용 — DRIVER_VERSION 대입은 source 한 entrypoint.sh 의 함수가 전역으로
@@ -24,13 +24,14 @@ set +eE
 # host 명령은 전부 ns 를 지나므로 ns 하나만 가짜로 둔다.
 MADISON=""
 APT_RC=0
-ns() {
+ns_default() {
   case "$*" in
     *"apt-cache madison"*) printf '%s\n' "${MADISON}" ;;
     *"apt-get install"*)   echo "$*" >> "$installs"; return "${APT_RC}" ;;
     *)                     return 0 ;;
   esac
 }
+ns() { ns_default "$@"; }
 apt_wait() { return 0; }
 
 # 각 사례는 자기 환경을 직접 설정한다(앞 사례 상태에 의존하지 않는다).
@@ -122,8 +123,8 @@ rc=0; reboot_defer_applicable || rc=$?
   || { echo "FAIL case9: rc=$rc (0 기대) — cross-major 재부팅 유예 가드가 사라졌다"; exit 1; }
 
 # (10)(11) 후보 루프. install_and_activate_driver 는 ENTRYPOINT_LIB_ONLY 가드 뒤에 정의되므로
-#   여기서는 없다 — 호출 인자를 기록하고 정해진 rc 를 돌려주는 stub 으로 둔다. stub 이 다른
-#   사례에 새지 않도록 두 사례를 파일 맨 끝에 둔다.
+#   여기서는 없다 — 호출 인자를 기록하고 정해진 rc 를 돌려주는 stub 으로 둔다. stub 은 이
+#   지점 이후 사례에서만 쓴다.
 calls="$tmp/calls"
 CAND_RC1=0; CAND_RC2=0   # 첫 후보·둘째 후보가 돌려줄 rc
 install_and_activate_driver() {
@@ -186,23 +187,22 @@ apt_wait() { return 0; }
 
 # (16) 타겟 패키지도 디스크 모듈도 host 에 없어 dpkg-query·modinfo(ns) 가 둘 다 실패해도
 #      collect_reboot_guard_state 는 set -Eeuo pipefail 아래서 죽지 않고 TARGET_PKG_OK=0·
-#      DISK_MOD_VER=빈 문자열로 끝나야 한다 — 그래야 "모든 후보 실패" 진단(log_error + exit 1)
-#      앞에서 조용히 죽지 않는다. ns 를 무조건 실패로 바꿔(패키지·모듈 부재 흉내) 호출부와 같은
-#      조건에서 돌린다. capture 는 두 statement 로 나눈다 — "out=\$(...) || rc=\$?" 로 합치면
-#      bash 가 그 치환을 "-e 가 무시되는 위치"로 보아 안쪽 set -e 를 통째로 무시해 버린다.
-EXPECTED_MAJOR=580
-ns() { return 1; }
+#      DISK_MOD_VER=빈 문자열로 끝나야 한다 — 그래야 "모든 후보 실패" 진단 앞에서 조용히 죽지
+#      않는다. ns 를 실패로 바꾸고 호출 기록으로 두 조회가 ns 까지 갔는지도 단정한다(CURRENT_KERNEL
+#      이 없으면 ns 호출 전에 변수 해제 오류가 난다). capture 는 두 statement 로 나눈다 — 한 줄로
+#      합치면 bash 가 치환 안쪽의 set -e 를 통째로 무시한다.
+EXPECTED_MAJOR=580; CURRENT_KERNEL=5.15.0-test
+nscalls="$tmp/nscalls"; : > "$nscalls"
+ns() { echo "$*" >> "$nscalls"; return 1; }
 out="$(set -Eeuo pipefail; collect_reboot_guard_state; echo "ok=${TARGET_PKG_OK} mod=[${DISK_MOD_VER}]")"
 rc=$?
-ns() {
-  case "$*" in
-    *"apt-cache madison"*) printf '%s\n' "${MADISON}" ;;
-    *"apt-get install"*)   echo "$*" >> "$installs"; return "${APT_RC}" ;;
-    *)                     return 0 ;;
-  esac
-}
+ns() { ns_default "$@"; }
 [[ "$rc" -eq 0 && "$out" == "ok=0 mod=[]" ]] \
   || { echo "FAIL case16: rc=$rc out=[$out] (0·'ok=0 mod=[]' 기대) — 패키지·모듈 부재 조회가 진단 전에 스크립트를 끊는다"; exit 1; }
+grep -q 'dpkg-query .*nvidia-driver-580' "$nscalls" \
+  || { echo "FAIL case16: dpkg-query 조회가 ns 까지 가지 않았다: $(cat "$nscalls")"; exit 1; }
+grep -q 'modinfo -k 5\.15\.0-test ' "$nscalls" \
+  || { echo "FAIL case16: modinfo 조회가 ns 까지 가지 않았다: $(cat "$nscalls")"; exit 1; }
 
 # (17) 정책 x.y.z·디스크 모듈 일치인데 메타패키지만 다른 patch 로 남은 사전 컴파일
 #      노드에서는 가드가 걸린다(rc 0) — 사전 컴파일은 메타패키지를 설치하지 않아 그
@@ -212,5 +212,85 @@ DISK_MOD_VER=580.126.09; DISK_MOD_MAJOR=580; ACTIVE_MAJOR=""; PIN_FAILED=0
 rc=0; reboot_defer_applicable || rc=$?
 [[ "$rc" -eq 0 ]] \
   || { echo "FAIL case17: rc=$rc (0 기대) — 사전 컴파일 노드의 메타패키지 patch 불일치로 회복 가능한 전이가 막힌다"; exit 1; }
+
+# (18) 같은 계열 patch 교체: 정책 580.178.04, 디스크 모듈 580.178.04, 로드 모듈 580.126.09 →
+#      구 모듈이 물려 있어 재부팅으로만 교체된다(rc 0). major 만 비교하면 580==580 이라 놓친다.
+DRIVER_VERSION=580.178.04; EXPECTED_MAJOR=580; TARGET_PKG_OK=1
+DISK_MOD_VER=580.178.04; DISK_MOD_MAJOR=580; ACTIVE_MAJOR=580; ACTIVE_NVRM=580.126.09; PIN_FAILED=0
+rc=0; reboot_defer_applicable || rc=$?
+[[ "$rc" -eq 0 ]] || { echo "FAIL case18: rc=$rc (0 기대) — 같은 계열 patch 교체에서 재부팅 유예가 걸리지 않는다"; exit 1; }
+
+# (19) 이미 정책 patch 가 로드돼 있으면 유예하지 않는다(rc 1).
+ACTIVE_NVRM=580.178.04
+rc=0; reboot_defer_applicable || rc=$?
+[[ "$rc" -eq 1 ]] || { echo "FAIL case19: rc=$rc (1 기대) — 정책 버전이 로드됐는데 재부팅을 맡긴다"; exit 1; }
+ACTIVE_NVRM=""
+
+# (20) 성공 뒤 판정: 설치를 건너뛴 경로(다운그레이드 가드·동일 버전·Host 채택)는 마커를 세우지 않는다.
+#      건너뛰면 DRIVER_VERSION 이 정책(낮은 값)으로 남아 전체 비교가 "다름" 을 내기 때문이다.
+rc=0; loaded_needs_reboot 580.178.04 580.126.09 1 || rc=$?
+[[ "$rc" -eq 1 ]] || { echo "FAIL case20: rc=$rc (1 기대) — 설치를 건너뛰었는데 재부팅 마커를 세운다"; exit 1; }
+
+# (21) 실제로 설치한 경로에서 로드 patch 가 정책과 다르면 마커를 세운다(rc 0), 같으면 세우지 않는다(rc 1),
+#      major 만 적은 정책은 major 비교(rc 1), 로드 버전을 못 읽으면 세우지 않는다(rc 1).
+rc=0; loaded_needs_reboot 580.126.09 580.178.04 0 || rc=$?
+[[ "$rc" -eq 0 ]] || { echo "FAIL case21a: rc=$rc (0 기대)"; exit 1; }
+rc=0; loaded_needs_reboot 580.178.04 580.178.04 0 || rc=$?
+[[ "$rc" -eq 1 ]] || { echo "FAIL case21b: rc=$rc (1 기대)"; exit 1; }
+rc=0; loaded_needs_reboot 580.126.09 580 0 || rc=$?
+[[ "$rc" -eq 1 ]] || { echo "FAIL case21c: rc=$rc (1 기대)"; exit 1; }
+rc=0; loaded_needs_reboot unknown 580.178.04 0 || rc=$?
+[[ "$rc" -eq 1 ]] || { echo "FAIL case21d: rc=$rc (1 기대)"; exit 1; }
+
+# (21e)(21f) 다른 계열이 로드돼 있으면 정책 형태와 무관하게 마커를 세운다(rc 0).
+rc=0; loaded_needs_reboot 570.1.1 580 0 || rc=$?
+[[ "$rc" -eq 0 ]] || { echo "FAIL case21e(major 정책·다른 major): rc=$rc (0 기대)"; exit 1; }
+rc=0; loaded_needs_reboot 570.86.10 580.178.04 0 || rc=$?
+[[ "$rc" -eq 0 ]] || { echo "FAIL case21f(x.y.z 정책·다른 계열): rc=$rc (0 기대)"; exit 1; }
+
+# (22) install_from_candidates 종료 상태: 모든 후보가 실패해도 함수는 0 을 돌려준다(호출부가 전역으로 판정).
+: > "$calls"; CAND_RC1=1; CAND_RC2=1; INSTALL_SUCCESS=; PIN_FAILED=
+rc=0; install_from_candidates >/dev/null 2>"$err" || rc=$?
+[[ "$rc" -eq 0 && "$INSTALL_SUCCESS" == "0" && "$PIN_FAILED" == "0" ]] \
+  || { echo "FAIL case22: rc=$rc INSTALL_SUCCESS=$INSTALL_SUCCESS PIN_FAILED=$PIN_FAILED (0·0·0 기대)"; exit 1; }
+: > "$calls"
+out="$(set -Eeuo pipefail; install_from_candidates >/dev/null 2>&1; echo reached)"
+[[ "$out" == "reached" ]] || { echo "FAIL case22b: errexit 아래서 install_from_candidates 가 스크립트를 끊는다"; exit 1; }
+
+# (23) 가드 형상: 기준선(조건이 모두 참)에서 조건 하나만 거짓으로 바꾸면 rc 1. 각 사례는 그 조건이
+#      결과를 가르도록 정책 형태를 고른다 — 디스크 major·EXPECTED_MAJOR 는 x.y.z 정책에서 다른
+#      조건이 대신 막아 주므로 major 정책으로 본다.
+guard_base() { DRIVER_VERSION=580.178.04; EXPECTED_MAJOR=580; TARGET_PKG_OK=1; DISK_MOD_VER=580.178.04; DISK_MOD_MAJOR=580; ACTIVE_MAJOR=""; ACTIVE_NVRM=""; PIN_FAILED=0; }
+guard_base; rc=0; reboot_defer_applicable || rc=$?; [[ "$rc" -eq 0 ]] || { echo "FAIL case23-base: rc=$rc"; exit 1; }
+guard_base; DRIVER_VERSION=580; DISK_MOD_MAJOR=570; DISK_MOD_VER=570.86.10; rc=0; reboot_defer_applicable || rc=$?
+[[ "$rc" -eq 1 ]] || { echo "FAIL case23a(DKMS 실패·디스크 모듈이 다른 major): rc=$rc"; exit 1; }
+guard_base; DRIVER_VERSION=580; ACTIVE_MAJOR=580; rc=0; reboot_defer_applicable || rc=$?
+[[ "$rc" -eq 1 ]] || { echo "FAIL case23b(major 정책·타겟 로드됨): rc=$rc"; exit 1; }
+guard_base; DRIVER_VERSION=; EXPECTED_MAJOR=; DISK_MOD_MAJOR=; DISK_MOD_VER=; ACTIVE_MAJOR=580; rc=0; reboot_defer_applicable || rc=$?
+[[ "$rc" -eq 1 ]] || { echo "FAIL case23c(EXPECTED_MAJOR 빈 값): rc=$rc"; exit 1; }
+guard_base; TARGET_PKG_OK=0; rc=0; reboot_defer_applicable || rc=$?
+[[ "$rc" -eq 1 ]] || { echo "FAIL case23d(타겟 패키지 없음): rc=$rc"; exit 1; }
+
+# (24) apply_reboot_defer: rebootStrategy=Never 면 마커 없이 1, IfNeeded 면 마커를 남기고 0,
+#      가드가 거짓이면 IfNeeded 여도 마커 없이 1. ns 는 needs-reboot 마커 명령만 기록한다.
+MARKER_DIR="$tmp/m"; marks="$tmp/marks"
+ns() { case "$*" in *"needs-reboot"*) echo "$*" >> "$marks" ;; esac; return 0; }
+guard_base; : > "$marks"
+rc=0; ( REBOOT_STRATEGY=Never; apply_reboot_defer ) >/dev/null 2>&1 || rc=$?
+[[ "$rc" -eq 1 && ! -s "$marks" ]] || { echo "FAIL case24a(Never): rc=$rc marks=$(cat "$marks")"; exit 1; }
+guard_base; : > "$marks"
+rc=0; ( REBOOT_STRATEGY=IfNeeded; apply_reboot_defer ) >/dev/null 2>&1 || rc=$?
+[[ "$rc" -eq 0 && -s "$marks" ]] || { echo "FAIL case24b(IfNeeded): rc=$rc marks=$(cat "$marks")"; exit 1; }
+guard_base; PIN_FAILED=1; : > "$marks"
+rc=0; ( REBOOT_STRATEGY=IfNeeded; apply_reboot_defer ) >/dev/null 2>&1 || rc=$?
+[[ "$rc" -eq 1 && ! -s "$marks" ]] || { echo "FAIL case24c(가드 거짓): rc=$rc marks=$(cat "$marks")"; exit 1; }
+ns() { ns_default "$@"; }
+
+# (25) 성공 뒤 호출부 형상: 세 번째 인자(설치 생략 여부)를 빼면 SKIP_DRIVER_INSTALL=1 인 실행이
+#      정책보다 높은 호스트에서 재부팅 마커를 세워 루프를 만든다. 호출이 이 형태 그대로 한 번 있어야 한다.
+# shellcheck disable=SC2016
+site='loaded_needs_reboot "${INSTALLED_VER}" "${DRIVER_VERSION:-}" "${SKIP_DRIVER_INSTALL:-0}"'
+[[ "$(grep -cF -- "$site" "$here/entrypoint.sh")" == "1" ]] \
+  || { echo "FAIL case25: 성공 뒤 호출부가 '$site' 형태로 한 번 있지 않다"; exit 1; }
 
 echo "PASS: host-pinned-version_test"
