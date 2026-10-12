@@ -2,7 +2,7 @@
 // reacquire_test.go: 장치를 잃은 뒤 다시 잡는지 시험
 // 상세: 드라이버 버전 전환으로 모듈이 내려가 /dev/rngd/* 가 사라지면 exporter 가 재기동한다.
 // SMI 핸들을 기동 시 한 번만 만들면, 드라이버가 복귀해도 그 핸들은 계속 빈 값을 낸다.
-// 생성일: 2026-08-10 | 수정일: 2026-10-11
+// 생성일: 2026-08-10 | 수정일: 2026-10-13
 // ============================================================
 package main
 
@@ -43,7 +43,7 @@ func (m mutableSource) Devices() ([]DeviceReading, error) { return m.cur.reading
 
 func liveDevice() []DeviceReading {
 	return []DeviceReading{{
-		Index: 0, Name: "rngd", BDF: "0000:27:00.0", CoreNum: 8,
+		Index: 0, Name: "npu0", BDF: "0000:27:00.0", CoreNum: 8,
 		Cores: []CoreReading{{Core: 0, UsagePercent: 1}}, Alive: true,
 	}}
 }
@@ -191,7 +191,7 @@ func TestRefresherResetsAbsenceCountOnRecovery(t *testing.T) {
 
 // TestRefresherDropsStaleSnapshotWhenDevicesVanish 는 장치를 못 읽은 회차에 마지막 정상값을 내보내지 않는지 본다.
 //
-// 붙들고 있으면 장치가 죽은 동안에도 kcloud_furiosa_device_alive 가 1 을 보고한다 — 없는 것을
+// 붙들고 있으면 장치가 죽은 동안에도 furiosa_npu_alive 가 1 을 보고한다 — 없는 것을
 // 있다고 말하는 쪽이, 지표가 잠깐 비어 absent() 로 잡히는 쪽보다 나쁘다.
 //
 // 깨는 뮤테이션: publish 를 `if len(samples) > 0` 로 감싸면 낡은 값이 남아 실패한다.
@@ -236,92 +236,5 @@ func TestMaxEmptyCyclesClearsObservedSwapWindow(t *testing.T) {
 	if tolerated <= observedSwapBlind {
 		t.Errorf("장치 부재를 %s 만 견딘다 — 관측된 교체 구간 %s 보다 짧아 정상 교체 중에 프로세스가 죽는다",
 			tolerated, observedSwapBlind)
-	}
-}
-
-// callTimeSource 는 Devices() 가 불릴 때마다 reason() 을 다시 읽는다 — refresher 가
-// 공급원을 캐시하므로 회차별로 다른 값을 주려면 호출 시점에 읽어야 한다.
-type callTimeSource struct{ reason func() uint32 }
-
-func (s callTimeSource) Devices() ([]DeviceReading, error) {
-	return []DeviceReading{{
-		Index: 0, BDF: "0000:27:00.0", UUID: "UUID-A", Alive: true,
-		ThrottleReason: s.reason(), ThrottleValid: true,
-	}}, nil
-}
-
-func TestRefresherCountsThrottleTransitions(t *testing.T) {
-	seq := []uint32{0, 0, 2, 2, 0, 4, 4}
-	i := 0
-	r := newRefresher(func() (DeviceSource, error) {
-		return callTimeSource{reason: func() uint32 {
-			if i >= len(seq) {
-				t.Fatalf("callTimeSource.reason 이 seq 범위를 넘어 불렸다: i=%d, len(seq)=%d", i, len(seq))
-			}
-			return seq[i]
-		}}, nil
-	})
-	r.giveUp = func() { t.Fatal("giveUp 이 불려서는 안 된다") }
-
-	for ; i < len(seq); i++ {
-		r.refresh()
-	}
-
-	got := r.snapshot()
-	if len(got) != 1 {
-		t.Fatalf("샘플 1건을 기대했는데 %d건이다", len(got))
-	}
-	// 0→2 와 0→4 두 번만 전이다. 2→2 와 4→4 는 같은 구간의 연속이라 세지 않는다.
-	if got[0].ThrottleEvents != 2 {
-		t.Errorf("ThrottleEvents=%d, 기대값 2", got[0].ThrottleEvents)
-	}
-}
-
-func TestRefresherDoesNotCountUnreadThrottle(t *testing.T) {
-	r := newRefresher(func() (DeviceSource, error) {
-		return fakeSource{readings: []DeviceReading{{
-			Index: 0, BDF: "0000:27:00.0", UUID: "UUID-A", Alive: true,
-			ThrottleReason: 0, ThrottleValid: false,
-		}}}, nil
-	})
-	r.giveUp = func() { t.Fatal("giveUp 이 불려서는 안 된다") }
-
-	r.refresh()
-	r.refresh()
-
-	if got := r.snapshot(); got[0].ThrottleEvents != 0 {
-		t.Errorf("ThrottleEvents=%d, 기대값 0", got[0].ThrottleEvents)
-	}
-}
-
-// TestRefresherIgnoresThrottleActiveAtStartup 는 기동 첫 회차에 이미 쓰로틀 중이던 장치를
-// 전이로 세지 않는지 본다. countThrottle 의 seen 가드가 없으면 "저장된 이전 값이 0" 과
-// "처음 봐서 비교할 이전 값이 아직 없음" 을 구분 못해, 기동 시점부터 쓰로틀 중이던 상태를
-// "방금 시작" 으로 잘못 센다.
-func TestRefresherIgnoresThrottleActiveAtStartup(t *testing.T) {
-	seq := []uint32{2, 2, 0, 2}
-	i := 0
-	r := newRefresher(func() (DeviceSource, error) {
-		return callTimeSource{reason: func() uint32 {
-			if i >= len(seq) {
-				t.Fatalf("callTimeSource.reason 이 seq 범위를 넘어 불렸다: i=%d, len(seq)=%d", i, len(seq))
-			}
-			return seq[i]
-		}}, nil
-	})
-	r.giveUp = func() { t.Fatal("giveUp 이 불려서는 안 된다") }
-
-	for ; i < len(seq); i++ {
-		r.refresh()
-	}
-
-	got := r.snapshot()
-	if len(got) != 1 {
-		t.Fatalf("샘플 1건을 기대했는데 %d건이다", len(got))
-	}
-	// 1회차의 2 는 기동 시점부터 이미 쓰로틀 중이던 상태라 전이로 안 센다(비교할 이전 값이
-	// 없다). 3→4회차의 0→2 만 전이다.
-	if got[0].ThrottleEvents != 1 {
-		t.Errorf("ThrottleEvents=%d, 기대값 1", got[0].ThrottleEvents)
 	}
 }

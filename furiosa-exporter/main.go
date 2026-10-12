@@ -2,7 +2,7 @@
 // main.go: Furiosa exporter 진입점. 주기 수집 + :9410/metrics 서빙.
 // 상세: 수집을 goroutine 이 주기로 돌려 스냅샷을 갱신하고, /metrics 요청은 그 스냅샷만
 // 읽는다 — 스크레이프가 벤더 SDK 호출을 직접 유발해 폭주로 장치를 때리는 것을 막는다.
-// 생성일: 2026-08-07 | 수정일: 2026-10-11
+// 생성일: 2026-08-07 | 수정일: 2026-10-13
 // ============================================================
 package main
 
@@ -39,9 +39,18 @@ func main() {
 			r.refresh()
 		}
 	}()
+	// 쓰로틀 사유는 수집 주기와 별개로 1초마다 읽어 변화를 센다.
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for now := range t.C {
+			r.sampleThrottle(now)
+		}
+	}()
 
 	reg := prometheus.NewRegistry()
-	reg.MustRegister(&Metrics{Node: node, Samples: r.snapshot})
+	reg.MustRegister(&Metrics{Node: node, Samples: r.snapshot,
+		Throttle: func(uuid string) (map[string]float64, bool) { return r.throttle.counts(uuid, time.Now()) }})
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))

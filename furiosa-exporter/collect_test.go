@@ -1,6 +1,6 @@
 // ============================================================
 // collect_test.go: 수집 변환 로직 시험(실장치·cgo 없이)
-// 생성일: 2026-08-07 | 수정일: 2026-10-11
+// 생성일: 2026-08-07 | 수정일: 2026-10-13
 // ============================================================
 package main
 
@@ -20,7 +20,7 @@ func (f fakeSource) Devices() ([]DeviceReading, error) { return f.readings, f.er
 
 func TestCollectMapsReadingToSample(t *testing.T) {
 	src := fakeSource{readings: []DeviceReading{{
-		Index: 0, Name: "rngd", BDF: "0000:27:00.0", CoreNum: 8,
+		Index: 0, Name: "npu0", BDF: "0000:27:00.0", CoreNum: 8,
 		Cores:          []CoreReading{{Core: 0, UsagePercent: 42.5}, {Core: 1, UsagePercent: 0}},
 		DramTotalBytes: 48 << 30, DramInUseBytes: 12 << 30,
 		PowerWatts: 91.5, TempSocPeak: 61, TempAmbient: 33, Alive: true,
@@ -37,8 +37,8 @@ func TestCollectMapsReadingToSample(t *testing.T) {
 	if s.PCI != "0000:27:00.0" {
 		t.Errorf("PCI = %q, 기대 0000:27:00.0", s.PCI)
 	}
-	if s.Device != "npu0" {
-		t.Errorf("Device = %q, 기대 npu0", s.Device)
+	if s.Name != "npu0" {
+		t.Errorf("Name = %q, 기대 npu0", s.Name)
 	}
 	if len(s.Cores) != 2 || s.Cores[0].UsagePercent != 42.5 {
 		t.Errorf("Cores = %+v", s.Cores)
@@ -53,13 +53,13 @@ func TestCollectMapsReadingToSample(t *testing.T) {
 func TestCollectSkipsFailedDeviceKeepsOthers(t *testing.T) {
 	src := fakeSource{readings: []DeviceReading{
 		{Index: 0, BDF: "0000:27:00.0", Err: errBoom},
-		{Index: 1, BDF: "0000:2a:00.0", Alive: true},
+		{Index: 1, Name: "npu1", BDF: "0000:2a:00.0", Alive: true},
 	}}
 	got, err := Collect(src)
 	if err != nil {
 		t.Fatalf("Collect 오류: %v", err)
 	}
-	if len(got) != 1 || got[0].Device != "npu1" {
+	if len(got) != 1 || got[0].Name != "npu1" {
 		t.Fatalf("살아남은 샘플 = %+v, 기대 npu1 하나", got)
 	}
 }
@@ -94,6 +94,9 @@ func TestCollectCarriesExtendedFields(t *testing.T) {
 		Governor:       "performance",
 		ThrottleReason: 2,
 		ThrottleValid:  true,
+		Arch:           "rngd", FirmwareVersion: "2026.3.0, 2d3f72a", DriverVersion: "2026.3.1, e28c5c0",
+		CoreNum: 8, AliveValid: true,
+		Cycles: []CoreCycle{{Core: 0, Total: 1000, TaskExec: 400}},
 	}}}
 	got, err := Collect(src)
 	if err != nil {
@@ -114,5 +117,17 @@ func TestCollectCarriesExtendedFields(t *testing.T) {
 	}
 	if !s.ThrottleValid {
 		t.Error("ThrottleValid=false, 기대값 true")
+	}
+	if s.Arch != "rngd" || s.FirmwareVersion != "2026.3.0, 2d3f72a" || s.DriverVersion != "2026.3.1, e28c5c0" {
+		t.Errorf("Arch/Firmware/Driver = %q/%q/%q", s.Arch, s.FirmwareVersion, s.DriverVersion)
+	}
+	if s.CoreNum != 8 {
+		t.Errorf("CoreNum=%d, 기대값 8", s.CoreNum)
+	}
+	if !s.AliveValid {
+		t.Error("AliveValid=false, 기대값 true")
+	}
+	if want := []CoreCycle{{Core: 0, Total: 1000, TaskExec: 400}}; len(s.Cycles) != len(want) || s.Cycles[0] != want[0] {
+		t.Errorf("Cycles=%+v, 기대값 %+v", s.Cycles, want)
 	}
 }
