@@ -16,6 +16,7 @@ on:
         options:
           - kcloud-host-exec
           - kcloud-node-manager
+          - nvidia-driver-ds
           - furiosa-driver-ds
           - tenstorrent-driver-ds
           - kcloud-tt-device-plugin

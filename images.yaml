@@ -2,7 +2,7 @@
 # images.yaml: GHCR 로 공개 발행하는 이미지의 빌드 컨텍스트 매니페스트
 # 상세: .github/workflows/publish-image.yml 이 이 파일을 읽어 디렉터리·Dockerfile·기본
 #       build-arg 를 정한다. 키가 곧 이미지 이름이고, build_args 의 ${TAG} 는 발행 태그로 치환된다.
-# 생성일: 2026-09-09 | 수정일: 2026-10-11
+# 생성일: 2026-09-09 | 수정일: 2026-10-12
 # ============================================================
 images:
   kcloud-host-exec:
@@ -11,6 +11,15 @@ images:
   kcloud-node-manager:
     dir: node-device-detector
     # 태그 규약: X.Y.Z (v 접두사 없음)
+  nvidia-driver-ds:
+    # vN(DKMS) 이미지는 NVIDIA 패키지를 담지 않는다(PREBAKE_DRIVER 기본 false) — 공개 빌드 가능.
+    # 커널별 사전 컴파일 이미지는 NVIDIA .deb 를 동봉하므로 내부에서만 굽는다(release-bundle 제외).
+    dir: driver-installer/nvidia
+    # 실사용 Dockerfile 은 v17 이다.
+    dockerfile: Dockerfile.v17
+    # 태그 규약: vN
+    # 커널별 사전 컴파일: make build-precompiled KERNEL=<커널> 로 <driverVersion>-k<커널>-v1
+    #   (예: 580.126.09-k5.15.0-171-generic-v1). Ubuntu linux-modules-nvidia 를 서명 .ko 로 동봉.
   furiosa-driver-ds:
     dir: driver-installer/furiosa
     # 이미지가 자기 태그를 알아야 설치 마커를 판정할 수 있다.
