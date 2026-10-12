@@ -4,7 +4,7 @@
 #       build-precompiled 는 커널 하나의 Ubuntu linux-modules-nvidia 를 서명 .ko 로
 #       링크해 함께 굽는다(태그 <driverVersion>-k<kernel>-<IMAGE_VARIANT>, 기본 v1).
 #       사내 미러는 REGISTRY=<사내 미러>/kcloud make ... 로 덮어쓴다.
-# 생성일: 2026-09-23 | 수정일: 2026-10-12
+# 생성일: 2026-09-23 | 수정일: 2026-10-13
 # ============================================================
 
 REGISTRY ?= ghcr.io/openkcloud
@@ -13,10 +13,12 @@ REPO     ?= nvidia-driver-ds
 # nvidia driver 메이저/패치. 이미지 라벨과 verify-image.sh 검증에 쓰인다.
 NVIDIA_DRIVER_MAJOR   ?= 580
 NVIDIA_DRIVER_VERSION ?= 580.126.09
-# 헤더 prebake 대상 커널(선택, DKMS 이미지용). build-precompiled 는 쓰지 않는다.
+# 헤더 prebake 대상 커널(선택, 컨테이너 안에서 컴파일하는 경로용). build-precompiled 는 쓰지 않는다.
 KERNEL_VERSION        ?=
 # 드라이버 패키지 prebake. 기본 false — 기본 이미지에 NVIDIA 바이너리를 넣지 않는다.
 PREBAKE_DRIVER        ?= false
+# 컴파일 도구(build-essential·dkms)와 PPA. 기본 false — 활성 경로는 호스트 도구를 쓴다.
+BUILD_TOOLS           ?= false
 IMAGE_TAG             ?= v1
 # build-precompiled 태그 접미사. 내용 변경 시 v2 로 바꿔 노드 캐시 재사용 방지.
 IMAGE_VARIANT         ?= v1
@@ -26,13 +28,14 @@ IMG                   ?= $(REGISTRY)/$(REPO):$(IMAGE_TAG)
 
 all: build
 
-## build: DKMS 전용 이미지 빌드 (Dockerfile.v17)
+## build: 기본(호스트 설치 경로) 이미지 빌드 (Dockerfile.v17)
 build:
 	docker build -f Dockerfile.v17 \
 	  --build-arg NVIDIA_DRIVER_MAJOR=$(NVIDIA_DRIVER_MAJOR) \
 	  --build-arg NVIDIA_DRIVER_VERSION=$(NVIDIA_DRIVER_VERSION) \
 	  --build-arg KERNEL_VERSION=$(KERNEL_VERSION) \
 	  --build-arg PREBAKE_DRIVER=$(PREBAKE_DRIVER) \
+	  --build-arg BUILD_TOOLS=$(BUILD_TOOLS) \
 	  -t $(IMG) .
 
 ## push: 레지스트리에 push
@@ -49,6 +52,7 @@ build-precompiled:
 	  --build-arg NVIDIA_DRIVER_VERSION=$(NVIDIA_DRIVER_VERSION) \
 	  --build-arg PREBUILD_KERNEL=$(KERNEL) \
 	  --build-arg PREBAKE_DRIVER=$(PREBAKE_DRIVER) \
+	  --build-arg BUILD_TOOLS=$(BUILD_TOOLS) \
 	  --label org.kcloud.prebuild-kernel=$(KERNEL) \
 	  -t $(REGISTRY)/$(REPO):$(NVIDIA_DRIVER_VERSION)-k$(KERNEL)-$(IMAGE_VARIANT) .
 

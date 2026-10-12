@@ -2,8 +2,9 @@
 # Dockerfile.v17: NVIDIA driver v17 — containerized install image
 # 상세: 컨테이너 내부에서 nvidia.ko 를 빌드해 host 에 sideload 한다(host namespace 진입 없음).
 #       v16 의 entrypoint.sh 등도 포함해 INSTALL_METHOD=hostnamespace 위임 시 함께 동작한다.
-#       기본 빌드는 NVIDIA 패키지를 담지 않는다(PREBAKE_DRIVER).
-# 생성일: 2026-04-27 | 수정일: 2026-10-12
+#       기본 빌드는 NVIDIA 패키지(PREBAKE_DRIVER)와 build-essential·dkms(BUILD_TOOLS)를 담지 않는다.
+#       PPA·software-properties-common 은 BUILD_TOOLS=true 이거나 PREBUILD_KERNEL 빌드일 때만 담는다.
+# 생성일: 2026-04-27 | 수정일: 2026-10-13
 # ============================================================
 FROM ubuntu:22.04
 
@@ -26,20 +27,35 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV INSTALL_METHOD=hostnamespace
 
 # ----------------------------------------------------------- #
-# 빌드 도구 + DKMS 환경 + (압축된 .ko 처리용) zstd / xz
+# 공통 도구 + (압축된 .ko 처리용) zstd / xz
 # ----------------------------------------------------------- #
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ca-certificates curl wget gnupg \
-      software-properties-common \
       iproute2 util-linux procps kmod pciutils jq \
-      build-essential gcc make \
       gawk \
-      dkms \
       zstd xz-utils \
-    && add-apt-repository -y ppa:graphics-drivers/ppa \
-    && apt-get update \
     && rm -rf /var/lib/apt/lists/*
+
+# ----------------------------------------------------------- #
+# 컴파일 도구 + DKMS 환경 + graphics-drivers PPA (선택, 기본 끔. PREBUILD_KERNEL 빌드는 PPA 를 따로 넣는다)
+#   - 컴파일 도구는 휴면 containerized 경로(entrypoint-v17.sh)만 컨테이너 안에서 쓴다. 활성
+#     경로는 nsenter 로 호스트 도구를 쓰므로 기본 빌드에서는 넣지 않는다. 되살리려면
+#     BUILD_TOOLS=true. PREBAKE_DRIVER=true 도 PPA 가 필요하면 BUILD_TOOLS=true 와 함께 준다.
+# ----------------------------------------------------------- #
+ARG BUILD_TOOLS=false
+RUN if [ "${BUILD_TOOLS}" = "true" ]; then \
+      apt-get update && \
+      apt-get install -y --no-install-recommends \
+        software-properties-common \
+        build-essential gcc make \
+        dkms && \
+      add-apt-repository -y ppa:graphics-drivers/ppa && \
+      apt-get update && \
+      rm -rf /var/lib/apt/lists/*; \
+    else \
+      echo "[build] BUILD_TOOLS=false — 컴파일 도구와 PPA 를 이미지에 넣지 않는다"; \
+    fi
 
 # ----------------------------------------------------------- #
 # v17.1: nvidia-container-toolkit repo GPG key 영구 import
@@ -93,7 +109,7 @@ RUN if [ "${PREBAKE_DRIVER}" = "true" ]; then \
 # 커널별 사전 컴파일(prebuilt) 옵션: PREBUILD_KERNEL 지정 시 LRM(linux-modules-nvidia-<major>-
 # <kernel>, 메타+objects+signatures)을 받아 objects 의 bits/BUILD 로 서명 .ko 를 링크해
 # /opt/nvidia-deb/<kernel>/ 에 .deb 3종과 함께 굽는다(태그 <driverVersion>-k<kernel>-vN). 비어
-# 있으면 기존 DKMS 전용과 동일하게 동작한다. 이 이미지는 기본 INSTALL_METHOD=hostnamespace 로
+# 있으면 사전 컴파일 없는 기본 이미지로 동작한다. 이 이미지는 기본 INSTALL_METHOD=hostnamespace 로
 # entrypoint.sh(v16)에 위임하므로 실제 설치·버전 불일치 fail-closed 검사는 그 파일이 한다.
 ARG PREBUILD_KERNEL=""
 RUN if [ -n "${PREBUILD_KERNEL}" ]; then set -eu; \
@@ -101,6 +117,11 @@ RUN if [ -n "${PREBUILD_KERNEL}" ]; then set -eu; \
       kodir="${dest}/lib/modules/${PREBUILD_KERNEL}/kernel/nvidia-${NVIDIA_DRIVER_MAJOR}"; \
       work="$(mktemp -d)"; \
       mkdir -p "${kodir}"; \
+      apt-get update; \
+      # 서명 .ko 링크(objects 의 bits/BUILD)에 binutils 가, 사용자 공간 .deb 의 정확한 버전
+      # 고정에 PPA 가 필요하다. BUILD_TOOLS 와 무관하게 이 RUN 이 직접 설치한다.
+      apt-get install -y --no-install-recommends binutils software-properties-common; \
+      add-apt-repository -y ppa:graphics-drivers/ppa; \
       apt-get update; \
       ( cd "${work}" && apt-get download \
           "linux-modules-nvidia-${NVIDIA_DRIVER_MAJOR}-${PREBUILD_KERNEL}" \
@@ -141,7 +162,7 @@ RUN if [ -n "${PREBUILD_KERNEL}" ]; then set -eu; \
       rm -rf "${work}" /var/lib/apt/lists/*; \
       echo "[build] prebuilt baked at ${dest} (version=${got})"; \
     else \
-      echo "[build] PREBUILD_KERNEL 미지정 — DKMS 전용 이미지"; \
+      echo "[build] PREBUILD_KERNEL 미지정 — 사전 컴파일 없는 기본(호스트 설치 경로) 이미지"; \
     fi
 
 # ----------------------------------------------------------- #
