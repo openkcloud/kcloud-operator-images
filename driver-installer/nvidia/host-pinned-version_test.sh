@@ -28,6 +28,8 @@ ns_default() {
   case "$*" in
     *"apt-cache madison"*) printf '%s\n' "${MADISON}" ;;
     *"apt-get install"*)   echo "$*" >> "$installs"; return "${APT_RC}" ;;
+    *"dpkg-query -W -f='\${source:Package}' nvidia-driver-"*) printf '%s' "${SRC_PKG:-}" ;;
+    *"dpkg-query -W -f='\${db:Status-Abbrev} \${binary:Package} \${source:Package}\n'"*) printf '%s\n' "${DPKG_LIST:-}"; return "${DPKG_LIST_RC:-0}" ;;
     *)                     return 0 ;;
   esac
 }
@@ -35,7 +37,7 @@ ns() { ns_default "$@"; }
 apt_wait() { return 0; }
 
 # 각 사례는 자기 환경을 직접 설정한다(앞 사례 상태에 의존하지 않는다).
-reset() { : > "$installs"; : > "$err"; APT_RC=0; }
+reset() { : > "$installs"; : > "$err"; APT_RC=0; SRC_PKG=; DPKG_LIST=; DPKG_LIST_RC=0; }
 lines() { wc -l < "$installs" | tr -d ' '; }
 
 MADISON_BOTH=$'nvidia-driver-580 | 580.178.04-0ubuntu1 | https://archive.example jammy-updates/restricted amd64 Packages\nnvidia-driver-580 | 580.159.03-0ubuntu1 | https://archive.example jammy-updates/restricted amd64 Packages'
@@ -292,5 +294,45 @@ ns() { ns_default "$@"; }
 site='loaded_needs_reboot "${INSTALLED_VER}" "${DRIVER_VERSION:-}" "${SKIP_DRIVER_INSTALL:-0}"'
 [[ "$(grep -cF -- "$site" "$here/entrypoint.sh")" == "1" ]] \
   || { echo "FAIL case25: 성공 뒤 호출부가 '$site' 형태로 한 번 있지 않다"; exit 1; }
+
+# (26) 같은 계열 하향: 설치된 사용자 공간 패키지(같은 소스)도 같은 버전으로 고정하고 --allow-downgrades.
+#      다른 소스(nvidia-container-toolkit)·제거 뒤 설정만 남은 패키지(rc)·이름에 버전이 든
+#      패키지(nvidia-firmware-580-<버전>)는 넣지 않는다.
+reset; DRIVER_VERSION=580.159.03; MADISON="$MADISON_BOTH"; SRC_PKG=nvidia-graphics-drivers-580
+DPKG_LIST=$'ii  nvidia-driver-580 nvidia-graphics-drivers-580\nii  nvidia-dkms-580 nvidia-graphics-drivers-580\nii  nvidia-kernel-source-580 nvidia-graphics-drivers-580\nii  libnvidia-compute-580:amd64 nvidia-graphics-drivers-580\nii  nvidia-utils-580 nvidia-graphics-drivers-580\nii  nvidia-kernel-common-580 nvidia-graphics-drivers-580\nii  nvidia-firmware-580-580.178.04 nvidia-graphics-drivers-580\nii  nvidia-container-toolkit libnvidia-container\nrc  libnvidia-gl-580:amd64 nvidia-graphics-drivers-580'
+rc=0; install_driver_pkg_on_host nvidia-driver-580 >/dev/null 2>"$err" || rc=$?
+[[ "$rc" -eq 0 && "$(lines)" == "1" ]] || { echo "FAIL case26: rc=$rc lines=$(lines)"; cat "$err"; exit 1; }
+for p in libnvidia-compute-580:amd64 nvidia-utils-580 nvidia-kernel-common-580; do
+  grep -q " ${p}=580.159.03-0ubuntu1" "$installs" || { echo "FAIL case26: ${p} 고정 없음: $(cat "$installs")"; exit 1; }
+done
+grep -q -- '--allow-downgrades' "$installs" || { echo "FAIL case26: --allow-downgrades 없음: $(cat "$installs")"; exit 1; }
+grep -q 'nvidia-container-toolkit\|libnvidia-gl-580' "$installs" && { echo "FAIL case26: 다른 소스·rc 패키지가 섞임: $(cat "$installs")"; exit 1; }
+grep -q 'nvidia-firmware' "$installs" && { echo "FAIL case26: 이름에 버전이 든 패키지가 섞임(옛 이름에 새 버전을 요구): $(cat "$installs")"; exit 1; }
+[[ "$(grep -o 'nvidia-driver-580=' "$installs" | wc -l | tr -d ' ')" == "1" ]] || { echo "FAIL case26: 메타패키지 중복: $(cat "$installs")"; exit 1; }
+for p in nvidia-dkms-580 nvidia-kernel-source-580; do
+  [[ "$(grep -o "${p}=" "$installs" | wc -l | tr -d ' ')" == "1" ]] || { echo "FAIL case26: ${p} 중복: $(cat "$installs")"; exit 1; }
+done
+
+# (27) 메타패키지가 설치되지 않은 새 노드: 세 패키지만 고정하고 --allow-downgrades 는 붙인다.
+reset; DRIVER_VERSION=580.159.03; MADISON="$MADISON_BOTH"
+rc=0; install_driver_pkg_on_host nvidia-driver-580 >/dev/null 2>"$err" || rc=$?
+[[ "$rc" -eq 0 ]] || { echo "FAIL case27: rc=$rc"; cat "$err"; exit 1; }
+[[ "$(tr ' ' '\n' < "$installs" | grep -c '=580.159.03-0ubuntu1')" == "3" ]] || { echo "FAIL case27: 고정 3개가 아님: $(cat "$installs")"; exit 1; }
+grep -q -- '--allow-downgrades' "$installs" || { echo "FAIL case27: --allow-downgrades 없음"; exit 1; }
+
+# (28) 고정하지 않는 경로(major 만 적은 정책)는 --allow-downgrades 를 붙이지 않는다.
+reset; DRIVER_VERSION=580; MADISON="$MADISON_BOTH"; SRC_PKG=nvidia-graphics-drivers-580
+rc=0; install_driver_pkg_on_host nvidia-driver-580 >/dev/null 2>"$err" || rc=$?
+[[ "$rc" -eq 0 && "$(lines)" == "1" ]] || { echo "FAIL case28: rc=$rc lines=$(lines)"; cat "$err"; exit 1; }
+grep -q ' nvidia-driver-580$' "$installs" || { echo "FAIL case28: 고정 없는 메타패키지 설치 줄 없음: $(cat "$installs")"; exit 1; }
+grep -q -- '--allow-downgrades' "$installs" && { echo "FAIL case28: 고정 없는 설치에 --allow-downgrades"; exit 1; }
+
+# (29) 메타패키지는 있는데 전체 목록 조회가 실패하면 세 패키지만 고정하고 stderr 에 경고한다.
+reset; DRIVER_VERSION=580.159.03; MADISON="$MADISON_BOTH"; SRC_PKG=nvidia-graphics-drivers-580
+DPKG_LIST=$'ii  libnvidia-compute-580:amd64 nvidia-graphics-drivers-580'; DPKG_LIST_RC=2
+rc=0; install_driver_pkg_on_host nvidia-driver-580 >/dev/null 2>"$err" || rc=$?
+[[ "$rc" -eq 0 ]] || { echo "FAIL case29: rc=$rc"; cat "$err"; exit 1; }
+[[ "$(tr ' ' '\n' < "$installs" | grep -c '=580.159.03-0ubuntu1')" == "3" ]] || { echo "FAIL case29: 고정 3개가 아님: $(cat "$installs")"; exit 1; }
+grep -q '같은 소스(nvidia-graphics-drivers-580) 설치 패키지 조회 실패' "$err" || { echo "FAIL case29: 경고 없음: $(cat "$err")"; exit 1; }
 
 echo "PASS: host-pinned-version_test"

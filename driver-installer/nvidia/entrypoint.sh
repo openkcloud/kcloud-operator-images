@@ -179,13 +179,34 @@ resolve_pinned_pkg_version() {
   return 1
 }
 
+# installed_sibling_pkgs <major>: 설치된 nvidia-driver-<major> 와 같은 소스 패키지에서 나온
+#   설치(ii) 패키지를 한 줄에 하나 낸다(메타·dkms·kernel-source 셋 제외). 같은 소스·같은 버전의
+#   바이너리는 저장소에 함께 올라오므로 고정 버전에 함께 묶어야 apt 가 하향·상향을 푼다. 이름에
+#   버전이 든 패키지(nvidia-firmware-580-580.178.04)는 이름이 버전마다 달라 제외한다 — 맞는
+#   패키지는 고정한 nvidia-kernel-common 의존으로 apt 가 가져온다. 메타패키지가 없으면 아무것도 내지 않는다.
+#   목록 조회가 실패하면 stderr 에 경고하고 아무것도 내지 않는다.
+installed_sibling_pkgs() {
+  local major="$1" src list
+  src="$(ns "dpkg-query -W -f='\${source:Package}' nvidia-driver-${major} 2>/dev/null" || true)"
+  [[ -n "${src}" ]] || return 0
+  if ! list="$(ns "dpkg-query -W -f='\${db:Status-Abbrev} \${binary:Package} \${source:Package}\n' 2>/dev/null")"; then
+    log_warn "같은 소스(${src}) 설치 패키지 조회 실패 — 메타·dkms·kernel-source 셋만 고정한다(사용자 공간 버전이 다르면 apt 가 거부한다)"
+    return 0
+  fi
+  awk -v s="${src}" -v m="${major}" '$1 == "ii" && $3 == s {
+      n = $2; sub(/:.*/, "", n)
+      if (n ~ /-[0-9]+\.[0-9]+/) next
+      if (n != "nvidia-driver-" m && n != "nvidia-dkms-" m && n != "nvidia-kernel-source-" m) print $2
+    }' <<< "${list}"
+}
+
 # install_driver_pkg_on_host <pkg>: host apt 로 드라이버 패키지를 설치한다. pkg 가
 #   정책 계열 메타패키지(nvidia-driver-<major>, major==DRIVER_VERSION 의 major)일 때만
 #   정책 버전으로 고정하고, 그 밖의 후보(LOCAL/NVIDIA_DRIVER_CHOICE 등)는 종전처럼
 #   고정 없이 설치한다. 반환: 0 성공, 1 고정 없는 설치 실패, 2 고정 관련 실패(저장소에
 #   정책 버전 부재 또는 고정 설치 실패) — 2 는 호출부에서 다른 후보로 대체하지 않는다.
 install_driver_pkg_on_host() {
-  local pkg="$1" want="${DRIVER_VERSION:-}" pinned="" pkgs
+  local pkg="$1" want="${DRIVER_VERSION:-}" pinned="" pkgs opts=""
   # madison 조회도 apt 락을 봐야 한다 — 다른 apt 작업이 색인을 다시 쓰는 중이면 출력이
   # 불완전해, 저장소에 있는 정책 버전을 없다고 판정한다.
   apt_wait || { log_error "apt/dpkg 잠금 대기 실패 — 고정 설치를 진행하지 않는다"; return 2; }
@@ -194,19 +215,23 @@ install_driver_pkg_on_host() {
     pinned="$(resolve_pinned_pkg_version "${pkg}")" || return 2
   fi
   if [[ -n "${pinned}" ]]; then
-    local major="${want%%.*}"
+    local major="${want%%.*}" sib
     pkgs="nvidia-driver-${major}=${pinned} nvidia-dkms-${major}=${pinned} nvidia-kernel-source-${major}=${pinned}"
-    log_info "정책 버전 ${want} 고정: ${pinned}"
+    while IFS= read -r sib; do
+      [[ -n "${sib}" ]] && pkgs+=" ${sib}=${pinned}"
+    done < <(installed_sibling_pkgs "${major}")
+    opts="--allow-downgrades"
+    log_info "정책 버전 ${want} 고정: ${pinned} (${pkgs})"
   else
     pkgs="${pkg}"
     log_info "고정 없음 — 계열 최신 설치 (DRIVER_VERSION=${want:-unset})"
   fi
-  if ns "DEBIAN_FRONTEND=noninteractive apt-get install -y ${pkgs}"; then
+  if ns "DEBIAN_FRONTEND=noninteractive apt-get install -y ${opts:+${opts} }${pkgs}"; then
     return 0
   fi
   if [[ -n "${pinned}" ]]; then
     log_error "정책 버전 고정 상태에서는 다른 후보로 대체하지 않는다 — 정책 version 을 바꾸거나 versionSource=Host 로"
-    log_error "고정 설치 목록: ${pkgs} — 셋은 같은 버전으로 고정되며 하나라도 저장소에 없으면 실패한다"
+    log_error "고정 설치 목록: ${pkgs} — 고정 목록은 같은 버전으로 묶이며 하나라도 저장소에 없으면 실패한다"
     return 2
   fi
   return 1
