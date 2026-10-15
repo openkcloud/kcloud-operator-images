@@ -7,12 +7,12 @@
 | 이미지 | 디렉터리 | 역할 | 태그 형태 | 현재 태그 |
 |---|---|---|---|---|
 | `kcloud-host-exec` | `kcloud-host-exec/` | operator 가 호스트에서 명령을 대신 실행할 때 쓰는 hostPID Job 이미지입니다. `alpine` 에 `nsenter` 만 더했습니다. MIG 관측과 적용, 노드 재부팅이 이 이미지를 공유합니다. | `vX.Y.Z` | `v0.1.0` |
-| `kcloud-node-manager` | `node-device-detector/` | 전 노드에서 상시 실행되는 비특권 감지 에이전트입니다. PCI 장치, 드라이버 버전, MIG 상태를 스캔해 `NodeDeviceReport` 리소스에 기록합니다. | `X.Y.Z` | `0.6.17` |
-| `nvidia-driver-ds` | `driver-installer/nvidia/` | NVIDIA 드라이버 설치기입니다. 빌드 파일은 `Dockerfile.v17` 입니다. 이미지에 NVIDIA 패키지를 담지 않습니다(설치는 노드 apt). | `vN` | `v6` |
+| `kcloud-node-manager` | `node-device-detector/` | 전 노드에서 상시 실행되는 비특권 감지 에이전트입니다. PCI 장치, 드라이버 버전, MIG 상태를 스캔해 `NodeDeviceReport` 리소스에 기록합니다. | `X.Y.Z` | `0.6.19` |
+| `nvidia-driver-ds` | `driver-installer/nvidia/` | NVIDIA 드라이버 설치기입니다. 빌드 파일은 `Dockerfile.v17` 입니다. 이미지에 NVIDIA 패키지를 담지 않습니다(설치는 노드 apt). | `vN` | `v8` |
 | `furiosa-driver-ds` | `driver-installer/furiosa/` | Furiosa Warboy 와 RNGD 공용 드라이버 설치기입니다. | `vN` | `v3` |
 | `tenstorrent-driver-ds` | `driver-installer/tenstorrent/` | Tenstorrent tt-kmd 드라이버 설치기입니다. 태그의 앞부분이 내장한 tt-kmd 소스의 버전입니다. | `<kmd 버전>-vN` | `2.8.0-v1` |
 | `kcloud-tt-device-plugin` | `tenstorrent-device-plugin/` | Tenstorrent Blackhole 용 Kubernetes device plugin 입니다. `tenstorrent.com/blackhole` 리소스를 광고합니다. | `vX.Y.Z` | `v0.1.0` |
-| `furiosa-exporter` | `furiosa-exporter/` | Furiosa NPU 지표를 Prometheus 형식으로 내보내는 exporter 입니다. 차트 기본값은 비활성입니다. | `X.Y.Z` | `0.1.3` |
+| `furiosa-exporter` | `furiosa-exporter/` | Furiosa NPU 지표를 Prometheus 형식으로 내보내는 exporter 입니다. 차트 기본값은 비활성입니다. | `X.Y.Z` | `0.4.0` |
 
 태그 형태는 operator 차트의 `values.yaml` 이 참조하는 값을 따릅니다. 이미지마다 형태가 달라 저장소 전체를 아우르는 버전 번호는 없습니다.
 
