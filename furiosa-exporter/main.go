@@ -32,6 +32,13 @@ func main() {
 		log.Fatal("NODE_NAME 환경변수가 비어 있다 — DaemonSet 이 fieldRef 로 주입해야 한다")
 	}
 
+	labels, src := loadThrottleLabels(throttleReasonListGlob)
+	throttleLabels = labels
+	if src == "" {
+		src = "furiosa-smi 헤더 기본값"
+	}
+	log.Printf("쓰로틀 사유 비트표 %d종 (%s)", len(throttleLabels), src)
+
 	// 공급원 생성은 refresher 에 맡긴다. 여기서 만들어 실패 시 종료하면, 드라이버 교체로 장치가
 	// 잠깐 사라진 순간에 뜬 프로세스가 재기동 루프에 빠지거나 빈 핸들을 물고 굳는다.
 	// 잃으면 다시 잡는 것이 이 프로세스의 일이다.
@@ -43,14 +50,21 @@ func main() {
 			return listPodResources(ctx, podResourcesSocket)
 		}}
 		owners.refresh(context.Background())
+		owners.warnUnmatched(r.snapshot())
 	}
 	go func() {
 		t := time.NewTicker(*interval)
 		defer t.Stop()
 		for range t.C {
 			r.refresh()
+			// 드라이버를 다른 판본으로 바꿔도 장치가 돌아오면 프로세스는 계속 산다. 사유 이름이 옛 표로
+			// 남지 않게, 표가 바뀌면 끝내서 kubelet 재기동으로 새 표를 읽는다.
+			if throttleTableChanged(throttleReasonListGlob, throttleLabels) {
+				log.Fatalf("노드 드라이버의 쓰로틀 사유 비트표가 바뀌었다 — 새 표로 다시 시작한다")
+			}
 			if owners != nil {
 				owners.refresh(context.Background())
+				owners.warnUnmatched(r.snapshot())
 			}
 		}
 	}()

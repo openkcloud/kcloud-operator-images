@@ -32,7 +32,7 @@ const furiosaResourcePrefix = "furiosa.ai/"
 type podRef struct{ Namespace, Pod, Container string }
 
 // deviceOwners 는 List 결과에서 Furiosa 장치 ID → 컨테이너 표를 만든다. 같은 장치가 여러
-// 컨테이너에 나오면 응답에서 먼저 나온 것을 쓴다(공식 exporter 와 같다).
+// 컨테이너에 나오면 응답에서 먼저 나온 것을 쓴다. device plugin 할당에서는 한 장치가 한 컨테이너에만 나온다.
 func deviceOwners(resp *podresourcesv1.ListPodResourcesResponse) map[string]podRef {
 	out := map[string]podRef{}
 	for _, p := range resp.GetPodResources() {
@@ -77,6 +77,7 @@ type ownerTable struct {
 	byID map[string]podRef
 
 	failing bool // 수집 goroutine 만 쓴다. 실패가 이어지는 동안 로그는 처음 한 번만 남긴다.
+	warned  bool // 수집 goroutine 만 쓴다. 장치 ID 불일치 경고는 프로세스마다 한 번이다.
 }
 
 // refresh 는 kubelet 에서 할당 기록을 다시 읽어 표를 바꾼다.
@@ -103,4 +104,30 @@ func (o *ownerTable) owner(uuid string) podRef {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	return o.byID[uuid]
+}
+
+// warnUnmatched 는 furiosa.ai 장치 할당이 있는데 수집한 장치 UUID 와 하나도 맞지 않으면 로그를 한 번
+// 남긴다. device plugin 이 UUID 가 아닌 장치 ID 를 쓰면 List 는 성공하고 세 라벨만 소리 없이 빈다.
+func (o *ownerTable) warnUnmatched(samples []DeviceSample) {
+	if o.warned || len(samples) == 0 {
+		return
+	}
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	if len(o.byID) == 0 {
+		return
+	}
+	for _, s := range samples {
+		if _, ok := o.byID[s.UUID]; ok {
+			return
+		}
+	}
+	var example string
+	for id := range o.byID {
+		example = id
+		break
+	}
+	log.Printf("kubelet 의 furiosa.ai 장치 ID %d개(예: %q)가 이 노드 장치 UUID 와 하나도 맞지 않아 "+
+		"namespace·pod·container 라벨이 비어 나간다 — device plugin 의 장치 ID 형식을 확인할 것", len(o.byID), example)
+	o.warned = true
 }

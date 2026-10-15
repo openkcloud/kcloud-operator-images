@@ -1,6 +1,6 @@
 // ============================================================
-// throttle_test.go: 쓰로틀 사유 비트별 변화 계수(300초 창)와 1초 표본 시험
-// 생성일: 2026-10-13 | 수정일: 2026-10-13
+// throttle_test.go: 쓰로틀 사유 비트별 변화 계수(300초 창)·1초 표본·드라이버 비트표 시험
+// 생성일: 2026-10-13 | 수정일: 2026-10-15
 // ============================================================
 package main
 
@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -232,5 +233,149 @@ func TestSampleThrottleSurvivesSourceReset(t *testing.T) {
 	// 두 회차에 한 번꼴로 공급원을 다시 만든다(약 100회). 재획득 경로를 타지 않으면 이 시험은 의미가 없다.
 	if created < 50 {
 		t.Fatalf("공급원 재생성 %d회, 50회 이상 기대 — 재획득 경로를 타지 않았다", created)
+	}
+}
+
+// rngd 드라이버 2026.3.1 의 /sys/class/rngd_mgmt/rngd!npu0mgmt/throttle_reason_list 원문이다.
+const driverThrottleList = `Throttle reason bitmaps:
+THROTTLE_IDLE                  = 0x00000001
+THROTTLE_THERMAL_SLOWDOWN      = 0x00000002
+THROTTLE_APP_POWER_CAP         = 0x00000004
+THROTTLE_APP_CLOCK_CAP         = 0x00000008
+THROTTLE_HW_CLOCK_CAP          = 0x00000010
+THROTTLE_HW_BUS_LIMIT          = 0x00000020
+THROTTLE_HW_POWER_CAP          = 0x00000040
+THROTTLE_GOV_CLOCK_CAP         = 0x00000080
+THROTTLE_OTHER_REASON          = 0x00000100
+`
+
+func TestParseThrottleReasonListDriverTable(t *testing.T) {
+	got := parseThrottleReasonList(driverThrottleList)
+	want := []throttleBit{
+		{"idle", 0x1}, {"thermal_slowdown", 0x2}, {"app_power_cap", 0x4}, {"app_clock_cap", 0x8},
+		{"hw_clock_cap", 0x10}, {"hw_bus_limit", 0x20}, {"hw_power_cap", 0x40},
+		{"gov_clock_cap", 0x80}, {"other_reason", 0x100},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestParseThrottleReasonListSkipsNonBitLines(t *testing.T) {
+	text := "Throttle reason bitmaps:\nTHROTTLE_NONE = 0x00000000\nTHROTTLE_BOTH = 0x00000003\nTHROTTLE_IDLE = 0x1\njunk\n"
+	got := parseThrottleReasonList(text)
+	if len(got) != 1 || got[0] != (throttleBit{"idle", 1}) {
+		t.Errorf("got %v, want [idle 1] 만", got)
+	}
+}
+
+func TestLoadThrottleLabelsPrefersDriverTable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "rngd!npu0mgmt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "rngd!npu0mgmt", "throttle_reason_list")
+	if err := os.WriteFile(p, []byte(driverThrottleList), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, src := loadThrottleLabels(filepath.Join(dir, "*", "throttle_reason_list"))
+	if src != p || len(got) != 9 {
+		t.Errorf("src=%q len=%d, want %q 9", src, len(got), p)
+	}
+	got, src = loadThrottleLabels(filepath.Join(t.TempDir(), "*", "throttle_reason_list"))
+	if src != "" || len(got) != len(headerThrottleLabels) {
+		t.Errorf("파일 없음: src=%q len=%d, want 헤더 표", src, len(got))
+	}
+}
+
+// 드라이버 표에서 0x80 은 governor 클럭 제한이다. 헤더 표로 세면 other_reason 으로 잡히던 값이다.
+func TestThrottleWindowCountsGovClockCapWithDriverTable(t *testing.T) {
+	prev := throttleLabels
+	throttleLabels = parseThrottleReasonList(driverThrottleList)
+	t.Cleanup(func() { throttleLabels = prev })
+
+	w := newThrottleWindow(300 * time.Second)
+	w.observe("U-A", 0, t0)
+	w.observe("U-A", 0x80, t0.Add(time.Second))
+	w.observe("U-A", 0x100, t0.Add(2*time.Second))
+	c, ok := w.counts("U-A", t0.Add(3*time.Second))
+	if !ok {
+		t.Fatal("관측한 장치인데 ok=false")
+	}
+	if c["gov_clock_cap"] != 2 || c["other_reason"] != 1 || len(c) != 9 {
+		t.Errorf("counts = %v, want gov_clock_cap 2(켜짐·꺼짐), other_reason 1, 9종", c)
+	}
+}
+
+func TestParseThrottleReasonListSkipsDuplicates(t *testing.T) {
+	text := "THROTTLE_IDLE = 0x1\nTHROTTLE_IDLE = 0x2\nTHROTTLE_OTHER = 0x1\nTHROTTLE_HW = 0x4\n"
+	got := parseThrottleReasonList(text)
+	want := []throttleBit{{"idle", 1}, {"hw", 4}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestThrottleTableChanged(t *testing.T) {
+	dir := t.TempDir()
+	glob := filepath.Join(dir, "*", "throttle_reason_list")
+	if throttleTableChanged(glob, headerThrottleLabels) {
+		t.Error("파일이 없는데 바뀐 것으로 봤다 — 드라이버 교체 중 재시작이 난다")
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "rngd!npu0mgmt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "rngd!npu0mgmt", "throttle_reason_list")
+	if err := os.WriteFile(p, []byte(driverThrottleList), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !throttleTableChanged(glob, headerThrottleLabels) {
+		t.Error("헤더 표로 떠 있는데 드라이버 표(9종)를 바뀌지 않은 것으로 봤다")
+	}
+	if throttleTableChanged(glob, parseThrottleReasonList(driverThrottleList)) {
+		t.Error("같은 표인데 바뀐 것으로 봤다 — 매 주기 재시작한다")
+	}
+}
+
+// 드라이버 표로 정하면 쓰로틀 횟수 지표도 그 표의 이름으로 나가야 한다(main 의 대입 뒤 Collect 경로).
+func TestMetricsThrottlingEventsUseDriverTable(t *testing.T) {
+	prev := throttleLabels
+	throttleLabels = parseThrottleReasonList(driverThrottleList)
+	t.Cleanup(func() { throttleLabels = prev })
+
+	w := newThrottleWindow(300 * time.Second)
+	w.observe("U-A", 0, t0)
+	w.observe("U-A", 0x80, t0.Add(time.Second))
+	s := sample()
+	m := &Metrics{Node: "rngd-1", Samples: func() []DeviceSample { return []DeviceSample{s} },
+		Throttle: func(uuid string) (map[string]float64, bool) { return w.counts(uuid, t0.Add(2*time.Second)) }}
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(m)
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var series int
+	var gov float64 = -1
+	for _, mf := range mfs {
+		if mf.GetName() != "furiosa_npu_throttling_events_count" {
+			continue
+		}
+		for _, mt := range mf.GetMetric() {
+			series++
+			for _, lp := range mt.GetLabel() {
+				if lp.GetName() == "label" && lp.GetValue() == "gov_clock_cap" {
+					gov = mt.GetGauge().GetValue()
+				}
+			}
+		}
+	}
+	if series != 9 || gov != 1 {
+		t.Errorf("시계열 %d개, gov_clock_cap=%v — want 9개, 1", series, gov)
 	}
 }

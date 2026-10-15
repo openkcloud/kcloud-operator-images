@@ -80,11 +80,10 @@ func (m *Metrics) Describe(ch chan<- *prometheus.Desc) {
 }
 
 // labels 는 baseLabels(Owner 가 있으면 kubeLabels 까지) 순서의 값이다. core 는 코어 단위 지표면 코어
-// 번호, 장치 단위 지표면 코어 범위다.
-func (m *Metrics) labels(s DeviceSample, core string, extra ...string) []string {
+// 번호, 장치 단위 지표면 코어 범위다. o 는 Collect 가 장치마다 한 번 조회한 소유 컨테이너다.
+func (m *Metrics) labels(s DeviceSample, o podRef, core string, extra ...string) []string {
 	lv := []string{s.Arch, core, s.Name, s.UUID, s.PCI, s.FirmwareVersion, s.DriverVersion, m.Node}
 	if m.Owner != nil {
-		o := m.Owner(s.UUID)
 		lv = append(lv, o.Namespace, o.Pod, o.Container)
 	}
 	return append(lv, extra...)
@@ -101,49 +100,54 @@ func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
 	}
 	for _, s := range m.Samples() {
 		dev := coreRange(s.CoreNum)
+		// 장치마다 한 번만 조회한다 — 한 스크레이프 안에서 같은 장치의 시계열이 같은 파드를 가리키게.
+		var o podRef
+		if m.Owner != nil {
+			o = m.Owner(s.UUID)
+		}
 		for _, c := range s.Cores {
-			gauge(d.coreUtil, c.UsagePercent, m.labels(s, itoa(c.Core)))
+			gauge(d.coreUtil, c.UsagePercent, m.labels(s, o, itoa(c.Core)))
 		}
 		for _, c := range s.CoreClocks {
-			gauge(d.coreFreq, float64(c.MHz), m.labels(s, itoa(c.Core)))
+			gauge(d.coreFreq, float64(c.MHz), m.labels(s, o, itoa(c.Core)))
 		}
 		for _, c := range s.Cycles {
-			counter(d.totalCycle, float64(c.Total), m.labels(s, itoa(c.Core)))
-			counter(d.taskCycle, float64(c.TaskExec), m.labels(s, itoa(c.Core)))
+			counter(d.totalCycle, float64(c.Total), m.labels(s, o, itoa(c.Core)))
+			counter(d.taskCycle, float64(c.TaskExec), m.labels(s, o, itoa(c.Core)))
 		}
 		// 비활성 모드 행은 내지 않는다. 값에 문자열을 담을 수 없어 활성 모드를 라벨로 세운다.
 		if s.Governor != "" {
-			gauge(d.governor, 1, m.labels(s, dev, s.Governor))
+			gauge(d.governor, 1, m.labels(s, o, dev, s.Governor))
 		}
 		if s.ThrottleValid {
-			gauge(d.throttleReason, float64(s.ThrottleReason), m.labels(s, dev))
+			gauge(d.throttleReason, float64(s.ThrottleReason), m.labels(s, o, dev))
 		}
 		if m.Throttle != nil {
 			if c, ok := m.Throttle(s.UUID); ok {
 				for _, l := range throttleLabels {
-					gauge(d.throttleEvents, c[l.name], m.labels(s, dev, l.name))
+					gauge(d.throttleEvents, c[l.name], m.labels(s, o, dev, l.name))
 				}
 			}
 		}
 		if s.DramTotalBytes > 0 {
-			gauge(d.dramUsage, float64(s.DramInUseBytes), m.labels(s, dev))
-			gauge(d.dramTotal, float64(s.DramTotalBytes), m.labels(s, dev))
+			gauge(d.dramUsage, float64(s.DramInUseBytes), m.labels(s, o, dev))
+			gauge(d.dramTotal, float64(s.DramTotalBytes), m.labels(s, o, dev))
 		}
 		if s.PowerWatts > 0 {
-			gauge(d.power, s.PowerWatts, m.labels(s, dev, "rms"))
+			gauge(d.power, s.PowerWatts, m.labels(s, o, dev, "rms"))
 		}
 		if s.TempSocPeak > 0 {
-			gauge(d.temp, s.TempSocPeak, m.labels(s, dev, "peak"))
+			gauge(d.temp, s.TempSocPeak, m.labels(s, o, dev, "peak"))
 		}
 		if s.TempAmbient > 0 {
-			gauge(d.temp, s.TempAmbient, m.labels(s, dev, "ambient"))
+			gauge(d.temp, s.TempAmbient, m.labels(s, o, dev, "ambient"))
 		}
 		if s.AliveValid {
 			alive := 0.0
 			if s.Alive {
 				alive = 1
 			}
-			gauge(d.alive, alive, m.labels(s, dev))
+			gauge(d.alive, alive, m.labels(s, o, dev))
 		}
 	}
 }

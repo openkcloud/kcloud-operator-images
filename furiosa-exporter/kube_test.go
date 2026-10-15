@@ -5,9 +5,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -167,5 +171,103 @@ func TestListPodResourcesOverUnixSocket(t *testing.T) {
 	}
 	if _, err := listPodResources(context.Background(), filepath.Join(t.TempDir(), "none.sock")); err == nil {
 		t.Error("없는 소켓에서 오류가 나지 않았다")
+	}
+}
+
+// device plugin 이 UUID 가 아닌 장치 ID 를 쓰면 List 는 성공하고 라벨만 빈다. 그 상태를 한 번 알린다.
+func TestOwnerTableWarnsOnceWhenNoDeviceIDMatches(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	resp := &podresourcesv1.ListPodResourcesResponse{PodResources: []*podresourcesv1.PodResources{
+		podRes("team-a", "llm-0", ctr("server", "furiosa.ai/rngd", "npu0_cores_0-3")),
+	}}
+	o := &ownerTable{list: func(context.Context) (*podresourcesv1.ListPodResourcesResponse, error) { return resp, nil }}
+	o.refresh(context.Background())
+	samples := []DeviceSample{sample()} // UUID "U-A"
+	o.warnUnmatched(samples)
+	o.warnUnmatched(samples)
+	if got := strings.Count(buf.String(), "하나도 맞지 않아"); got != 1 {
+		t.Fatalf("경고 %d번, want 1번\n%s", got, buf.String())
+	}
+	if !strings.Contains(buf.String(), "npu0_cores_0-3") {
+		t.Errorf("경고에 장치 ID 예시가 없다: %s", buf.String())
+	}
+
+	buf.Reset()
+	resp.PodResources[0].Containers[0].Devices[0].DeviceIds = []string{"U-A"}
+	m := &ownerTable{list: o.list}
+	m.refresh(context.Background())
+	m.warnUnmatched(samples)
+	if buf.Len() != 0 {
+		t.Errorf("UUID 가 맞는데 경고가 나왔다: %s", buf.String())
+	}
+}
+
+// 12종 지표 전부가 같은 세 라벨을 단다(실측과 같은 범위를 시험으로 고정한다).
+func TestMetricsKubeLabelsOnEveryFamily(t *testing.T) {
+	s := sample()
+	s.Cores = []CoreReading{{Core: 0, UsagePercent: 10}}
+	s.CoreClocks = []CoreClock{{Core: 0, MHz: 2000}}
+	s.Cycles = []CoreCycle{{Core: 0, Total: 5, TaskExec: 2}}
+	s.Governor, s.ThrottleValid, s.ThrottleReason = "performance", true, 0
+	s.DramTotalBytes, s.DramInUseBytes = 100, 10
+	s.PowerWatts, s.TempSocPeak, s.TempAmbient = 39, 40, 30
+	s.AliveValid, s.Alive = true, true
+	m := &Metrics{Node: "rngd-1", Samples: func() []DeviceSample { return []DeviceSample{s} },
+		Throttle: func(string) (map[string]float64, bool) { return map[string]float64{}, true },
+		Owner:    func(string) podRef { return podRef{"team-a", "llm-0", "server"} }}
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(m)
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mfs) != 12 {
+		t.Fatalf("지표 종류 %d개, want 12", len(mfs))
+	}
+	want := map[string]string{"namespace": "team-a", "pod": "llm-0", "container": "server"}
+	for _, mf := range mfs {
+		for _, mt := range mf.GetMetric() {
+			got := map[string]string{}
+			for _, lp := range mt.GetLabel() {
+				got[lp.GetName()] = lp.GetValue()
+			}
+			for k, v := range want {
+				if got[k] != v {
+					t.Errorf("%s: %s=%q, want %q", mf.GetName(), k, got[k], v)
+				}
+			}
+		}
+	}
+}
+
+// 한 스크레이프 안에서 장치마다 소유 조회는 한 번이다 — 시계열마다 조회하면 그 사이 표가 바뀌어
+// 같은 장치의 시계열이 서로 다른 파드를 가리킬 수 있다.
+func TestMetricsLooksUpOwnerOncePerDevice(t *testing.T) {
+	s := sample()
+	s.Cores = []CoreReading{{Core: 0, UsagePercent: 10}, {Core: 1, UsagePercent: 20}}
+	s.AliveValid, s.Alive = true, true
+	s.PowerWatts = 39
+	calls := 0
+	m := &Metrics{Node: "rngd-1", Samples: func() []DeviceSample { return []DeviceSample{s} },
+		Owner: func(string) podRef { calls++; return podRef{"ns", fmt.Sprintf("pod-%d", calls), "c"} }}
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(m)
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Errorf("Owner 호출 %d번, want 장치당 1번", calls)
+	}
+	for _, mf := range mfs {
+		for _, mt := range mf.GetMetric() {
+			for _, lp := range mt.GetLabel() {
+				if lp.GetName() == "pod" && lp.GetValue() != "pod-1" {
+					t.Errorf("%s: pod=%q, want 한 스크레이프 안에서 pod-1 하나", mf.GetName(), lp.GetValue())
+				}
+			}
+		}
 	}
 }
