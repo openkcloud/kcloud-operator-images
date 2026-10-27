@@ -4,7 +4,7 @@
 # 상세: Host namespace(nsenter)에서 GPU 드라이버를 설치하고, MANAGE_CONTAINER_TOOLKIT=true 일
 #       때만 nvidia-ctk·containerd/docker 런타임도 구성한다. 사전 컴파일 모듈이 동봉돼 있으면
 #       정합성을 fail-closed 로 확인한 뒤 DKMS 대신 그 모듈을 host 에 설치한다.
-# 생성일: 2026-04-17 | 수정일: 2026-10-13
+# 생성일: 2026-04-17 | 수정일: 2026-10-28
 # ============================================================
 set -Eeuo pipefail
 [[ "${DEBUG:-0}" == "1" ]] && set -x
@@ -148,12 +148,68 @@ prebuilt_ko_version() {
   return 1
 }
 
+apt_wait() {
+  ns "bash -lc '
+    for i in {1..180}; do
+      if ! fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+         && ! fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
+         && ! fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then
+        exit 0
+      fi
+      sleep 2
+    done
+    echo \"[ERR] dpkg/apt lock held too long\" >&2
+    exit 1
+  '"
+}
+
 # ============================================================================ #
-# 정책 버전 고정과 후보 설치 루프 (host apt 경로) — 발행 이미지의 실제 설치 경로. 아래 네
+# 안전장치 헬퍼: passthrough 감지
+# ============================================================================ #
+
+# 호스트 PCI 를 순회하며 NVIDIA GPU 의 "<total> <installable>" 개수를 출력한다.
+#   total       : NVIDIA(0x10de) & display class(0x03xxxx) 장치 총 개수
+#   installable : 그 중 driver 바인딩이 vfio-pci 가 아닌(=nvidia/미바인딩) 장치 개수
+# 집계는 단일 ns 호출(호스트 mount namespace)에서 수행하여 왕복/쿼팅을 최소화한다.
+nvidia_gpu_bindings() {
+  ns 'total=0; installable=0
+    for d in /sys/bus/pci/devices/*/; do
+      [ -r "${d}vendor" ] || continue
+      vendor=$(cat "${d}vendor" 2>/dev/null || echo "")
+      class=$(cat "${d}class" 2>/dev/null || echo "")
+      [ "$vendor" = "0x10de" ] || continue
+      case "$class" in 0x03*) ;; *) continue ;; esac
+      total=$((total+1))
+      bound=""
+      if [ -L "${d}driver" ]; then
+        bound=$(basename "$(readlink "${d}driver")" 2>/dev/null || echo "")
+      fi
+      [ "$bound" != "vfio-pci" ] && installable=$((installable+1))
+    done
+    echo "$total $installable"'
+}
+
+# 설치 대상 GPU 존재 여부.
+#   반환 0(true)  : installable GPU 가 1개 이상 있거나, GPU 가 아예 없는 비-GPU 노드(가드 미적용)
+#   반환 1(false) : GPU 는 있으나 전량 vfio-pci 바인딩(passthrough)
+nvidia_has_installable_gpu() {
+  local out total installable
+  out=$(nvidia_gpu_bindings 2>/dev/null | tail -n1 || echo "0 0")
+  total=$(echo "$out" | awk '{print $1+0}')
+  installable=$(echo "$out" | awk '{print $2+0}')
+  # 비-GPU 노드는 가드 미적용 → 기존 동작 유지
+  [ "${total:-0}" -eq 0 ] && return 0
+  [ "${installable:-0}" -gt 0 ] && return 0
+  return 1
+}
+
+# ============================================================================ #
+# 정책 버전 고정과 후보 설치 루프 (host apt 경로) — 발행 이미지의 실제 설치 경로. 아래
 #   함수는 설치 블록(install_from_candidates 와 "모든 후보 실패" 분기, install_and_activate_driver)
 #   이 부르지만 단위 시험이 실제 본문을 source 할 수 있어야 하므로 ENTRYPOINT_LIB_ONLY 가드
-#   앞에 둔다. apt_wait 와 install_and_activate_driver 는 가드 뒤에 정의되므로 lib-only 로
-#   source 한 시험은 그 둘을 stub 으로 둬야 한다.
+#   앞에 둔다. install_and_activate_driver 는 가드 뒤에 정의되므로 lib-only 로 source 한
+#   시험은 stub 으로 둬야 한다(apt_wait 는 가드 앞에 있지만 host 를 부르므로 시험은 stub 으로
+#   덮는다).
 
 # resolve_pinned_pkg_version <pkg>: 이 시점의 DRIVER_VERSION(정책 값, VERSION_SOURCE=Host 로
 #   호스트 값을 채택한 경우는 SKIP_DRIVER_INSTALL=1 이라 이 경로에 오지 않는다)에 맞는 host
@@ -200,38 +256,146 @@ installed_sibling_pkgs() {
     }' <<< "${list}"
 }
 
-# install_driver_pkg_on_host <pkg>: host apt 로 드라이버 패키지를 설치한다. pkg 가
-#   정책 계열 메타패키지(nvidia-driver-<major>, major==DRIVER_VERSION 의 major)일 때만
-#   정책 버전으로 고정하고, 그 밖의 후보(LOCAL/NVIDIA_DRIVER_CHOICE 등)는 종전처럼
-#   고정 없이 설치한다. 반환: 0 성공, 1 고정 없는 설치 실패, 2 고정 관련 실패(저장소에
-#   정책 버전 부재 또는 고정 설치 실패) — 2 는 호출부에서 다른 후보로 대체하지 않는다.
-install_driver_pkg_on_host() {
-  local pkg="$1" want="${DRIVER_VERSION:-}" pinned="" pkgs opts=""
-  # madison 조회도 apt 락을 봐야 한다 — 다른 apt 작업이 색인을 다시 쓰는 중이면 출력이
-  # 불완전해, 저장소에 있는 정책 버전을 없다고 판정한다.
-  apt_wait || { log_error "apt/dpkg 잠금 대기 실패 — 고정 설치를 진행하지 않는다"; return 2; }
+# 설치를 막는 hold 충돌 종료 코드. operator 의 driverjob.ExitCodeHostPackageConflict 와 같은
+#   값이다(kcloud-operator internal/driverjob/preflightjob.go). 값을 바꾸면 두 곳을 함께 바꾼다.
+EXIT_HOLD_CONFLICT=3
+
+# unmet_dep_pkgs <apt 출력 파일>: "unmet dependencies" 절에 나온 패키지(왼쪽 패키지와 Depends·
+#   PreDepends·Breaks·Conflicts 대상)를 한 줄에 하나 낸다. 아키텍처 접미사는 뗀다.
+unmet_dep_pkgs() {
+  awk '
+    /^The following packages have unmet dependencies:/ { s = 1; next }
+    s && /^E:/ { s = 0 }
+    s {
+      line = $0
+      if (match(line, /^ *[^ ]+ :/)) {
+        n = substr(line, RSTART, RLENGTH); sub(/ :$/, "", n); gsub(/ /, "", n); sub(/:.*/, "", n); print n
+      }
+      while (match(line, /(Pre)?Depends: [^ ]+|Breaks: [^ ]+|Conflicts: [^ ]+/)) {
+        t = substr(line, RSTART, RLENGTH); sub(/^[A-Za-z]+: /, "", t); sub(/:.*/, "", t); print t
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }' "$1" | sort -u
+}
+
+# held_change_pkgs <apt 출력 파일>: "held packages will be changed" 절의 패키지를 낸다(설치
+#   목록에 hold 된 패키지가 든 경우). 아키텍처 접미사는 뗀다.
+held_change_pkgs() {
+  awk '
+    /^The following held packages will be changed:/ { s = 1; next }
+    s && /^  / { for (i = 1; i <= NF; i++) { n = $i; sub(/:.*/, "", n); print n }; next }
+    s { s = 0 }' "$1" | sort -u
+}
+
+# held_conflict_pkgs <apt 출력 파일>: 이 거절에 걸린 hold 패키지를 낸다. unmet 절은 apt-mark
+#   showhold 와 교집합만 본다 — "held broken packages" 문구는 hold 가 없어도 나온다.
+held_conflict_pkgs() {
+  local holds
+  holds="$(ns "apt-mark showhold" 2>/dev/null | sed 's/:.*//' | sort -u)" || holds=""
+  {
+    if [[ -n "${holds}" ]]; then
+      unmet_dep_pkgs "$1" | grep -Fx -f <(printf '%s\n' "${holds}") || true
+    fi
+    held_change_pkgs "$1"
+  } | sort -u
+}
+
+# hold_conflict_message <apt 출력 파일> <hold 패키지 목록>: 상태·이벤트에 그대로 실릴 한 줄.
+#   hold 패키지 이름을 맨 앞에 두고 apt 의 거절 줄을 최대 세 줄 붙인다. 세 줄은 grep -m3 로 자른다 —
+#   head 로 자르면 출력이 클 때 grep 이 SIGPIPE 로 끝나 pipefail 아래서 거절 줄이 빈 값이 된다.
+hold_conflict_message() {
+  local held lines
+  held="$(printf '%s\n' "$2" | paste -sd' ' -)"
+  lines="$(grep -m3 -E ' : (Pre)?Depends: |^E: ' "$1" | sed 's/^ *//' | paste -sd' ' -)" || lines=""
+  printf 'hold 된 패키지(%s)가 드라이버 설치를 막는다 — %s — 노드에서 apt-mark showhold 로 확인하고, hold 를 풀지는 노드 이미지 관리자가 정한다(apt-mark unhold %s)' \
+    "${held}" "${lines}" "${held}"
+}
+
+# write_termination_message <문장>: 컨테이너 종료 메시지(/dev/termination-log)에 앞 2048 바이트를
+#   쓴다. operator 가 이 값을 DriverUpgradeState 메시지에 싣는다. 쓰기 실패는 무시한다.
+write_termination_message() {
+  printf '%s' "$1" | head -c 2048 | iconv -c -f UTF-8 -t UTF-8 2>/dev/null >"${TERMINATION_LOG:-/dev/termination-log}" || true
+}
+
+# simulate_driver_install <출력 파일>: DRIVER_PKG_OPTS·DRIVER_PKG_LIST 설치를 apt 로 모의(-s -y)하고
+#   출력을 파일에 쓴다. apt 의 종료 상태를 돌려준다. 실제 설치와 같은 인자다. 이 출력의 영어 문구를
+#   파싱하므로 LC_ALL=C 로 번역을 끈다(출력을 읽지 않는 실제 설치 명령에는 붙이지 않는다).
+simulate_driver_install() {
+  ns "LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get -s -y install ${DRIVER_PKG_OPTS:+${DRIVER_PKG_OPTS} }${DRIVER_PKG_LIST}" >"$1" 2>&1
+}
+
+# classify_hold_conflict <apt 출력 파일>: 이 apt 거절이 hold 충돌인지 판정한다. 충돌이면
+#   HOLD_CONFLICT_MSG 에 사유를 남기고 log_error 한 뒤 0, 아니면 1. diagnose_hold_conflict(설치 실패
+#   뒤)와 run_preflight(설치 전 점검)가 이 판정 하나를 쓴다.
+classify_hold_conflict() {
+  local held
+  held="$(held_conflict_pkgs "$1")"
+  [[ -n "${held}" ]] || return 1
+  HOLD_CONFLICT_MSG="$(hold_conflict_message "$1" "${held}")"
+  log_error "${HOLD_CONFLICT_MSG}"
+  return 0  # 판정은 로그 출력과 무관하다 — stderr 가 닫혀 log_error 가 실패해도 충돌이다
+}
+
+# diagnose_hold_conflict: 설치가 실패한 뒤 같은 인자로 모의 설치(simulate_driver_install)하고 그
+#   출력을 classify_hold_conflict 로 판정한다. 충돌이면 HOLD_CONFLICT_MSG 에 사유를 남기고 0,
+#   아니면 1. hold 는 바꾸지 않는다.
+diagnose_hold_conflict() {
+  local out rc=1
+  out="$(mktemp)"
+  simulate_driver_install "${out}" || true
+  classify_hold_conflict "${out}" && rc=0
+  rm -f "${out}"
+  return "${rc}"
+}
+
+# driver_pkg_args <pkg>: <pkg> 를 설치할 apt 인자를 정한다. 설치(install_driver_pkg_on_host)와
+#   설치 전 점검(run_preflight)이 같은 목록을 쓰도록 결정은 여기 하나에만 둔다. pkg 가 정책
+#   계열 메타패키지(nvidia-driver-<major>, major==DRIVER_VERSION 의 major)일 때만 정책 버전으로
+#   고정하고 같은 소스의 설치된 패키지도 같은 버전으로 묶는다. 결과는 전역 DRIVER_PKG_OPTS·
+#   DRIVER_PKG_LIST·DRIVER_PKG_PINNED 에 남긴다. 반환: 0 정함, 2 정책 버전이 저장소에 없음.
+driver_pkg_args() {
+  local pkg="$1" want="${DRIVER_VERSION:-}" pinned="" major sib
+  DRIVER_PKG_OPTS=""
+  DRIVER_PKG_LIST="${pkg}"
+  DRIVER_PKG_PINNED=""
   if [[ "${pkg}" =~ ^nvidia-driver-([0-9]+)$ && "${BASH_REMATCH[1]}" == "${want%%.*}" ]]; then
     # local 선언과 대입을 나눠야 피호출자의 종료 상태가 보존된다.
     pinned="$(resolve_pinned_pkg_version "${pkg}")" || return 2
   fi
-  if [[ -n "${pinned}" ]]; then
-    local major="${want%%.*}" sib
-    pkgs="nvidia-driver-${major}=${pinned} nvidia-dkms-${major}=${pinned} nvidia-kernel-source-${major}=${pinned}"
-    while IFS= read -r sib; do
-      [[ -n "${sib}" ]] && pkgs+=" ${sib}=${pinned}"
-    done < <(installed_sibling_pkgs "${major}")
-    opts="--allow-downgrades"
-    log_info "정책 버전 ${want} 고정: ${pinned} (${pkgs})"
+  [[ -n "${pinned}" ]] || return 0
+  major="${want%%.*}"
+  DRIVER_PKG_PINNED="${pinned}"
+  DRIVER_PKG_LIST="nvidia-driver-${major}=${pinned} nvidia-dkms-${major}=${pinned} nvidia-kernel-source-${major}=${pinned}"
+  while IFS= read -r sib; do
+    [[ -n "${sib}" ]] && DRIVER_PKG_LIST+=" ${sib}=${pinned}"
+  done < <(installed_sibling_pkgs "${major}")
+  DRIVER_PKG_OPTS="--allow-downgrades"
+}
+
+# install_driver_pkg_on_host <pkg>: host apt 로 드라이버 패키지를 설치한다. 인자는 driver_pkg_args
+#   가 정한다. 반환: 0 성공, 1 고정 없는 설치 실패, 2 고정 관련 실패(저장소에 정책 버전 부재
+#   또는 hold 가 아닌 고정 설치 실패), 3 hold 된 호스트 패키지가 설치를 막음(EXIT_HOLD_CONFLICT)
+#   — 2·3 은 호출부에서 다른 후보로 대체하지 않는다.
+install_driver_pkg_on_host() {
+  local pkg="$1" want="${DRIVER_VERSION:-}"
+  # madison 조회도 apt 락을 봐야 한다 — 다른 apt 작업이 색인을 다시 쓰는 중이면 출력이
+  # 불완전해, 저장소에 있는 정책 버전을 없다고 판정한다.
+  apt_wait || { log_error "apt/dpkg 잠금 대기 실패 — 고정 설치를 진행하지 않는다"; return 2; }
+  driver_pkg_args "${pkg}" || return 2
+  if [[ -n "${DRIVER_PKG_PINNED}" ]]; then
+    log_info "정책 버전 ${want} 고정: ${DRIVER_PKG_PINNED} (${DRIVER_PKG_LIST})"
   else
-    pkgs="${pkg}"
     log_info "고정 없음 — 계열 최신 설치 (DRIVER_VERSION=${want:-unset})"
   fi
-  if ns "DEBIAN_FRONTEND=noninteractive apt-get install -y ${opts:+${opts} }${pkgs}"; then
+  if ns "DEBIAN_FRONTEND=noninteractive apt-get install -y ${DRIVER_PKG_OPTS:+${DRIVER_PKG_OPTS} }${DRIVER_PKG_LIST}"; then
     return 0
   fi
-  if [[ -n "${pinned}" ]]; then
+  if diagnose_hold_conflict; then
+    return "${EXIT_HOLD_CONFLICT}"
+  fi
+  if [[ -n "${DRIVER_PKG_PINNED}" ]]; then
     log_error "정책 버전 고정 상태에서는 다른 후보로 대체하지 않는다 — 정책 version 을 바꾸거나 versionSource=Host 로"
-    log_error "고정 설치 목록: ${pkgs} — 고정 목록은 같은 버전으로 묶이며 하나라도 저장소에 없으면 실패한다"
+    log_error "고정 설치 목록: ${DRIVER_PKG_LIST} — 고정 목록은 같은 버전으로 묶이며 하나라도 저장소에 없으면 실패한다"
     return 2
   fi
   return 1
@@ -280,7 +444,8 @@ loaded_needs_reboot() {
 }
 
 # install_from_candidates: DRIVER_CANDIDATES 를 순서대로 시도한다. 결과는 전역에 남긴다 —
-#   INSTALL_SUCCESS=1 설치·활성 성공, PIN_FAILED=1 정책 버전 고정 실패(후보가 2 를 돌려줌).
+#   INSTALL_SUCCESS=1 설치·활성 성공, PIN_FAILED=1 정책 버전 고정 실패(후보가 2 를 돌려줌)
+#   또는 hold 충돌, HOLD_CONFLICT=1 hold 충돌(후보가 3 을 돌려줌).
 #   rc 2 에서 남은 후보로 대체하지 않는 것이 이 루프가 지키는 규칙이다 — 대체하면 정책이
 #   아닌 버전이 조용히 깔린다. 전역을 쓰는 채로 함수로 감싼 이유는 단위 시험이 그 규칙을
 #   직접 부를 수 있게 하는 것뿐이다. local 로 바꾸면 호출부와 reboot_defer_applicable 이
@@ -289,6 +454,7 @@ install_from_candidates() {
   INSTALL_SUCCESS=0
   # 고정 실패 표식 — reboot_defer_applicable 이 읽는다. set -u 때문에 루프 앞에서 초기화한다.
   PIN_FAILED=0
+  HOLD_CONFLICT=0
   for cand in "${DRIVER_CANDIDATES[@]}"; do
     if [[ "${cand}" == "__UBUNTU_DRIVERS_AUTOINSTALL__" ]]; then
       log_info "Trying ubuntu-drivers autoinstall as last resort"
@@ -302,6 +468,14 @@ install_from_candidates() {
     else
       cand_rc=$?
       log_warn "Driver candidate failed: ${cand}"
+      if [[ "${cand_rc}" -eq "${EXIT_HOLD_CONFLICT}" ]]; then
+        # hold 된 호스트 패키지가 막았다 — 다른 후보도 같은 hold 에 막히므로 대체하지 않는다.
+        # PIN_FAILED=1 은 아래 "모든 후보 실패" 경로의 재부팅 유예 가드를 건너뛰게 한다.
+        log_error "hold 된 호스트 패키지가 설치를 막는다 — 남은 후보로 대체하지 않는다"
+        HOLD_CONFLICT=1
+        PIN_FAILED=1
+        break
+      fi
       if [[ "${cand_rc}" -eq 2 ]]; then
         # 정책 버전 고정 실패 — 계열 최신·수동 지정 후보로 대체하면 정책이 아닌 버전이
         # 조용히 깔린다. 다음 후보로 넘어가지 않고 아래 "모든 후보 실패" 경로로 간다.
@@ -327,6 +501,67 @@ apply_reboot_defer() {
   log_warn "reboot-deferred(모듈 교체, target ${DRIVER_VERSION:-${EXPECTED_MAJOR}} 모듈 디스크 준비 완료, active=${ACTIVE_NVRM:-none/broken} — 구 모듈 busy/broken) — needs-reboot 마커 생성 후 정상 종료(reboot 위임)."
   ns "mkdir -p ${MARKER_DIR}; touch ${MARKER_DIR}/needs-reboot" || true
   return 0
+}
+
+# exit_install_failed: 모든 후보가 실패했을 때 사유를 종료 메시지에 쓰고 프로세스를 끝낸다. hold 충돌
+#   (HOLD_CONFLICT=1)이면 EXIT_HOLD_CONFLICT 로, 그 밖이면 1 로 끝난다. 단위 시험이 하위 셸에서 종료
+#   상태와 종료 메시지를 확인할 수 있도록 가드 앞에 둔다. 호출부는 "모든 후보 실패" 분기 한 곳이다.
+exit_install_failed() {
+  if [[ "${HOLD_CONFLICT:-0}" == "1" ]]; then
+    write_termination_message "${HOLD_CONFLICT_MSG:-hold 된 호스트 패키지가 드라이버 설치를 막는다}"
+    exit "${EXIT_HOLD_CONFLICT}"
+  fi
+  write_termination_message "드라이버 설치 실패 — install Job 로그의 apt·DKMS 출력을 확인한다"
+  log_error "All driver candidates failed; see the apt and DKMS output above."
+  exit 1
+}
+
+# run_preflight: 설치 전 점검. 설치가 쓸 apt 인자로 모의 설치(-s -y)를 돌려 hold 된 호스트 패키지가
+#   설치를 막는지 본다. 호스트에는 apt 목록 갱신만 하고 패키지를 설치·제거·hold 하지 않는다.
+#   반환: 0 통과 또는 점검 대상 아님, EXIT_HOLD_CONFLICT hold 충돌, 1 판정 불가(operator 는 설치를
+#   막지 않는다). 사유는 종료 메시지에 남긴다. preflight.sh 가 부른다.
+run_preflight() {
+  local major sim msg
+  if [[ "${SKIP_ON_PASSTHROUGH:-true}" != "false" ]] && ! nvidia_has_installable_gpu; then
+    log_info "설치 전 점검: GPU 가 모두 vfio-pci 에 묶여 설치 대상이 없다 — 통과"
+    return 0
+  fi
+  CURRENT_KERNEL="$(ns "uname -r")"
+  if select_prebuilt_deb "${CURRENT_KERNEL}" >/dev/null 2>&1; then
+    log_info "설치 전 점검: ${CURRENT_KERNEL} 용 사전 컴파일 .deb 를 써 apt 메타패키지 설치를 점검하지 않는다 — 통과"
+    return 0
+  fi
+  major="${DRIVER_VERSION:-}"
+  major="${major%%.*}"
+  if [[ ! "${major}" =~ ^[0-9]+$ ]]; then
+    log_info "설치 전 점검: DRIVER_VERSION(${DRIVER_VERSION:-unset})이 계열 번호로 시작하지 않아 점검하지 않는다 — 통과"
+    return 0
+  fi
+  if ! apt_wait || ! ns "apt-get update -y"; then
+    msg="설치 전 점검 판정 불가: apt 목록 갱신 실패 — 설치 단계가 다시 시도한다"
+    log_warn "${msg}"; write_termination_message "${msg}"
+    return 1
+  fi
+  if ! driver_pkg_args "nvidia-driver-${major}"; then
+    msg="설치 전 점검 판정 불가: 정책 버전 ${DRIVER_VERSION} 을 저장소에서 찾지 못했다(PPA 추가 전 판정) — 설치 단계가 다시 확인한다"
+    log_warn "${msg}"; write_termination_message "${msg}"
+    return 1
+  fi
+  sim="$(mktemp)"
+  if simulate_driver_install "${sim}"; then
+    log_info "설치 전 점검 통과: ${DRIVER_PKG_LIST}"
+    rm -f "${sim}"
+    return 0
+  fi
+  if classify_hold_conflict "${sim}"; then
+    write_termination_message "${HOLD_CONFLICT_MSG}"
+    rm -f "${sim}"
+    return "${EXIT_HOLD_CONFLICT}"
+  fi
+  msg="설치 전 점검 판정 불가: apt 모의 설치 실패(hold 와 무관) — $(grep -m1 '^E: ' "${sim}" || echo 'E: 사유 미상') — 설치 단계가 다시 시도한다"
+  log_warn "${msg}"; write_termination_message "${msg}"
+  rm -f "${sim}"
+  return 1
 }
 
 # 함수 정의만 필요할 때(단위 시험)는 여기서 멈춘다 — 아래 실행부(marker 이관·설치·트랩)를 건너뛴다.
@@ -464,21 +699,6 @@ choose_driver_candidates() {
 # ============================================================================ #
 # apt / dpkg helpers
 # ============================================================================ #
-apt_wait() {
-  ns "bash -lc '
-    for i in {1..180}; do
-      if ! fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
-         && ! fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
-         && ! fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then
-        exit 0
-      fi
-      sleep 2
-    done
-    echo \"[ERR] dpkg/apt lock held too long\" >&2
-    exit 1
-  '"
-}
-
 apt_update() {
   apt_wait || { log_error "apt/dpkg 잠금 대기 실패"; return 1; }
   ns "apt-get update -y" || { log_error "apt-get update failed"; return 1; }
@@ -514,46 +734,6 @@ driver_healthy() {
     log_info "Version verified: loaded=${loaded_ver}, expected major=${expected_major}"
   fi
   return 0
-}
-
-# ============================================================================ #
-# 안전장치 헬퍼: passthrough 감지 · 버전 비교
-# ============================================================================ #
-
-# 호스트 PCI 를 순회하며 NVIDIA GPU 의 "<total> <installable>" 개수를 출력한다.
-#   total       : NVIDIA(0x10de) & display class(0x03xxxx) 장치 총 개수
-#   installable : 그 중 driver 바인딩이 vfio-pci 가 아닌(=nvidia/미바인딩) 장치 개수
-# 집계는 단일 ns 호출(호스트 mount namespace)에서 수행하여 왕복/쿼팅을 최소화한다.
-nvidia_gpu_bindings() {
-  ns 'total=0; installable=0
-    for d in /sys/bus/pci/devices/*/; do
-      [ -r "${d}vendor" ] || continue
-      vendor=$(cat "${d}vendor" 2>/dev/null || echo "")
-      class=$(cat "${d}class" 2>/dev/null || echo "")
-      [ "$vendor" = "0x10de" ] || continue
-      case "$class" in 0x03*) ;; *) continue ;; esac
-      total=$((total+1))
-      bound=""
-      if [ -L "${d}driver" ]; then
-        bound=$(basename "$(readlink "${d}driver")" 2>/dev/null || echo "")
-      fi
-      [ "$bound" != "vfio-pci" ] && installable=$((installable+1))
-    done
-    echo "$total $installable"'
-}
-
-# 설치 대상 GPU 존재 여부.
-#   반환 0(true)  : installable GPU 가 1개 이상 있거나, GPU 가 아예 없는 비-GPU 노드(가드 미적용)
-#   반환 1(false) : GPU 는 있으나 전량 vfio-pci 바인딩(passthrough)
-nvidia_has_installable_gpu() {
-  local out total installable
-  out=$(nvidia_gpu_bindings 2>/dev/null | tail -n1 || echo "0 0")
-  total=$(echo "$out" | awk '{print $1+0}')
-  installable=$(echo "$out" | awk '{print $2+0}')
-  # 비-GPU 노드는 가드 미적용 → 기존 동작 유지
-  [ "${total:-0}" -eq 0 ] && return 0
-  [ "${installable:-0}" -gt 0 ] && return 0
-  return 1
 }
 
 # 버전 비교: $1 > $2 이면 0(true). dpkg 로 정상 비교되면 그 결과, 형식오류 등으로
@@ -632,6 +812,10 @@ install_and_activate_driver() {
       # 드라이버 패키지는 --no-install-recommends 없이 설치 (커널 모듈 패키지 포함 필요)
       local pkg_rc=0
       install_driver_pkg_on_host "${pkg}" || pkg_rc=$?
+      if [[ "${pkg_rc}" -eq "${EXIT_HOLD_CONFLICT}" ]]; then
+        # hold 충돌 — 사유는 install_driver_pkg_on_host 가 HOLD_CONFLICT_MSG 에 남겼다.
+        return "${EXIT_HOLD_CONFLICT}"
+      fi
       if [[ "${pkg_rc}" -eq 2 ]]; then
         # 정책 버전 고정 관련 실패 — 사유는 install_driver_pkg_on_host 가 이미 남겼다.
         return 2
@@ -940,8 +1124,7 @@ if [[ "${SKIP_DRIVER_INSTALL:-0}" != "1" ]]; then
       exec sleep infinity
     fi
     # ------------------------------------------------------------------------------------------
-    log_error "All driver candidates failed; please inspect DKMS logs above."
-    exit 1
+    exit_install_failed
   fi
 fi
 

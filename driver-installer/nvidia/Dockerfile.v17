@@ -4,7 +4,7 @@
 #       containerized(컨테이너 안에서 nvidia.ko 를 빌드해 sideload)는 휴면이며, 그 DKMS 빌드 도구는 BUILD_TOOLS=true 빌드에만 든다.
 #       기본 빌드는 NVIDIA 패키지(PREBAKE_DRIVER)와 build-essential·dkms(BUILD_TOOLS)를 담지 않는다.
 #       PPA·software-properties-common 은 BUILD_TOOLS=true 이거나 PREBUILD_KERNEL 빌드일 때만 담는다.
-# 생성일: 2026-04-27 | 수정일: 2026-10-13
+# 생성일: 2026-04-27 | 수정일: 2026-10-27
 # ============================================================
 FROM ubuntu:22.04
 
@@ -184,8 +184,10 @@ COPY driver-manager.sh /usr/local/bin/driver-manager.sh
 COPY marker-migrate.sh /usr/local/bin/marker-migrate.sh
 COPY nvidia-blacklist.sh /usr/local/bin/nvidia-blacklist.sh
 COPY userspace-deps-check.sh /usr/local/bin/userspace-deps-check.sh
+COPY preflight.sh /usr/local/bin/preflight.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh \
-             /usr/local/bin/check-kernel-headers.sh /usr/local/bin/driver-manager.sh
+             /usr/local/bin/check-kernel-headers.sh /usr/local/bin/driver-manager.sh \
+             /usr/local/bin/preflight.sh
 
 # ----------------------------------------------------------- #
 # image label 검증용 — verify-image.sh 가 ai.npu.driver.full 비교

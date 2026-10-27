@@ -4,7 +4,7 @@
 # 상세: 발행 이미지는 Dockerfile.v17 의 INSTALL_METHOD=hostnamespace 로 이 경로를 탄다. ns·
 #       apt_wait 를 가짜 함수로 두고 실제 install_driver_pkg_on_host 를 source 해 부른다
 #       (복사본이 아니다). docker·컨테이너·host 접촉 없이 도는 순수 bash 시험이다.
-# 생성일: 2026-10-06 | 수정일: 2026-10-13
+# 생성일: 2026-10-06 | 수정일: 2026-10-27
 # ============================================================
 # shellcheck disable=SC2034
 # 파일 전체에 적용 — DRIVER_VERSION 대입은 source 한 entrypoint.sh 의 함수가 전역으로
@@ -334,5 +334,35 @@ rc=0; install_driver_pkg_on_host nvidia-driver-580 >/dev/null 2>"$err" || rc=$?
 [[ "$rc" -eq 0 ]] || { echo "FAIL case29: rc=$rc"; cat "$err"; exit 1; }
 [[ "$(tr ' ' '\n' < "$installs" | grep -c '=580.159.03-0ubuntu1')" == "3" ]] || { echo "FAIL case29: 고정 3개가 아님: $(cat "$installs")"; exit 1; }
 grep -q '같은 소스(nvidia-graphics-drivers-580) 설치 패키지 조회 실패' "$err" || { echo "FAIL case29: 경고 없음: $(cat "$err")"; exit 1; }
+
+# (30) driver_pkg_args 는 설치와 같은 목록을 전역에 남기고 설치를 부르지 않는다.
+reset; DRIVER_VERSION=580.159.03; MADISON="$MADISON_BOTH"; SRC_PKG=nvidia-graphics-drivers-580
+DPKG_LIST=$'ii  nvidia-driver-580 nvidia-graphics-drivers-580\nii  nvidia-utils-580 nvidia-graphics-drivers-580'
+rc=0; driver_pkg_args nvidia-driver-580 >/dev/null 2>"$err" || rc=$?
+[[ "$rc" -eq 0 ]] || { echo "FAIL case30: rc=$rc (0 기대)"; cat "$err"; exit 1; }
+[[ "$DRIVER_PKG_OPTS" == "--allow-downgrades" && "$DRIVER_PKG_PINNED" == "580.159.03-0ubuntu1" ]] \
+  || { echo "FAIL case30: opts=[$DRIVER_PKG_OPTS] pinned=[$DRIVER_PKG_PINNED]"; exit 1; }
+want30="nvidia-driver-580=580.159.03-0ubuntu1 nvidia-dkms-580=580.159.03-0ubuntu1 nvidia-kernel-source-580=580.159.03-0ubuntu1 nvidia-utils-580=580.159.03-0ubuntu1"
+[[ "$DRIVER_PKG_LIST" == "$want30" ]] || { echo "FAIL case30: list=[$DRIVER_PKG_LIST]"; exit 1; }
+[[ "$(lines)" == "0" ]] || { echo "FAIL case30: 인자 계산이 설치를 불렀다: $(cat "$installs")"; exit 1; }
+
+# (31) 고정 대상이 아니면 패키지 이름 하나·옵션 없음, 정책 버전이 저장소에 없으면 2.
+reset; DRIVER_VERSION=580; MADISON="$MADISON_BOTH"
+driver_pkg_args nvidia-driver-580 >/dev/null 2>&1
+[[ "$DRIVER_PKG_LIST" == "nvidia-driver-580" && -z "$DRIVER_PKG_OPTS" && -z "$DRIVER_PKG_PINNED" ]] \
+  || { echo "FAIL case31a: list=[$DRIVER_PKG_LIST] opts=[$DRIVER_PKG_OPTS] pinned=[$DRIVER_PKG_PINNED]"; exit 1; }
+reset; DRIVER_VERSION=580.159.03; MADISON="$MADISON_ONLY_178"
+rc=0; driver_pkg_args nvidia-driver-580 >/dev/null 2>"$err" || rc=$?
+[[ "$rc" -eq 2 ]] || { echo "FAIL case31b: rc=$rc (2 기대)"; exit 1; }
+
+# (32) lib-only source 만으로 점검에 필요한 함수가 모두 정의된다(시험 stub 이 없는 새 셸).
+# shellcheck source=/dev/null
+( ENTRYPOINT_LIB_ONLY=1; source "$here/entrypoint.sh" >/dev/null 2>&1
+  declare -F apt_wait nvidia_gpu_bindings nvidia_has_installable_gpu driver_pkg_args >/dev/null ) \
+  || { echo "FAIL case32: lib-only source 에 점검 헬퍼가 없다"; exit 1; }
+# 위 서브셸은 이 시험의 apt_wait stub 을 물려받아 apt_wait 를 가드 뒤로 옮겨도 통과한다.
+# 새 프로세스로 apt_wait 만 한 번 더 확인한다.
+ENTRYPOINT_LIB_ONLY=1 bash -c 'source "$1" >/dev/null 2>&1; declare -F apt_wait >/dev/null' _ "$here/entrypoint.sh" \
+  || { echo "FAIL case32: 새 프로세스의 lib-only source 에 apt_wait 가 없다"; exit 1; }
 
 echo "PASS: host-pinned-version_test"
