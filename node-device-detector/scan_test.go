@@ -1,8 +1,9 @@
 // ============================================================
 // scan_test.go: 스캔 헬퍼 단위 테스트
 // 상세: migLgip() 의 nvidia-smi 부재 경로(CI) 검증 + parseMigObservation 의 fail-closed
-// 판정 단위 테스트. 픽스처는 worker1 A30(nvidia-smi 580 계열) 실측 원문 형식을 쓴다.
-// 생성일: 2026-07-23 | 수정일: 2026-10-11
+// 판정 단위 테스트 + Rebellions 드라이버 버전 탐지(커널 모듈 우선·rebellions-dkms 패키지).
+// 픽스처는 worker1 A30(nvidia-smi 580 계열)·worker4 ATOM+(rebellions-dkms 3.0.0) 실측 형식을 쓴다.
+// 생성일: 2026-07-23 | 수정일: 2026-10-27
 // ============================================================
 package main
 
@@ -374,5 +375,80 @@ func TestNvidiaOnDiskVersion_None(t *testing.T) {
 	got := nvidiaOnDiskVersion()
 	if got != "" {
 		t.Errorf("nvidiaOnDiskVersion() = %q, want empty string", got)
+	}
+}
+
+/* ---------- Rebellions 드라이버 버전 ---------- */
+
+// fakeSysModule 은 hostSysModule 을 임시 디렉터리로 돌린다. H() 는 "/sys/" 접두를 그대로 두므로
+// fakeSysfsPci 와 같은 방식으로 접두를 바꿔야 가짜 모듈 트리를 만들 수 있다.
+func fakeSysModule(t *testing.T) {
+	t.Helper()
+	tmp := t.TempDir()
+	oldPrefix, oldMod := hostPrefix, hostSysModule
+	hostPrefix, hostSysModule = tmp, "/module"
+	t.Cleanup(func() { hostPrefix, hostSysModule = oldPrefix, oldMod })
+}
+
+// writeHostFile 은 호스트 경로 p(H() 적용 전)에 body 를 쓴다.
+func writeHostFile(t *testing.T, p, body string) {
+	t.Helper()
+	full := H(p)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const (
+	dpkgRblnDkms = "Package: rebellions-dkms\nVersion: 3.0.0\nStatus: install ok installed\n\n"
+	// 같은 접두의 펌웨어·도구 패키지. 드라이버 버전으로 집으면 틀리도록 다른 버전을 준다.
+	dpkgRblnOthers = "Package: rebellions-fw\nVersion: 9.9.9\nStatus: install ok installed\n\n" +
+		"Package: rebellions-tool\nVersion: 9.9.9\nStatus: install ok installed\n\n" +
+		"Package: rbln-sdk\nVersion: 0.10.3\nStatus: install ok installed\n\n"
+)
+
+// worker4(ATOM+ 2장) 실측: /sys/module/rebellions/version 과 rebellions-dkms 패키지가 모두 3.0.0 인데
+// 패키지 이름 "rebellions" 만 찾던 코드는 빈 버전을 보고했다. 모듈 버전이 패키지 버전보다 우선한다.
+func TestRblnShortVersionPrefersKernelModule(t *testing.T) {
+	fakeSysModule(t)
+	writeHostFile(t, filepath.Join(hostSysModule, "rebellions", "version"), "3.0.0\n")
+	writeHostFile(t, hostVarDpkgStatus, "Package: rebellions-dkms\nVersion: 2.9.0\nStatus: install ok installed\n\n")
+	short, detail := rblnShortVersion()
+	if short != "3.0.0" || detail != "driver=3.0.0" {
+		t.Fatalf("short=%q detail=%q, want 3.0.0 / driver=3.0.0 (모듈 버전 우선)", short, detail)
+	}
+	if !rblnDriverLoaded() {
+		t.Errorf("모듈 디렉터리가 있는데 loaded=false")
+	}
+}
+
+// 모듈이 올라와 있지 않으면(미적재·재부팅 대기) 설치된 rebellions-dkms 패키지 버전으로 물러난다.
+func TestRblnShortVersionFallsBackToDkmsPackage(t *testing.T) {
+	fakeSysModule(t)
+	writeHostFile(t, hostVarDpkgStatus, dpkgRblnOthers+dpkgRblnDkms)
+	short, detail := rblnShortVersion()
+	if short != "3.0.0" || detail != "driver=3.0.0" {
+		t.Fatalf("short=%q detail=%q, want 3.0.0 / driver=3.0.0 (rebellions-dkms)", short, detail)
+	}
+	if rblnDriverLoaded() {
+		t.Errorf("모듈 디렉터리가 없는데 loaded=true")
+	}
+}
+
+func TestRblnShortVersionIgnoresNonDriverPackages(t *testing.T) {
+	fakeSysModule(t)
+	writeHostFile(t, hostVarDpkgStatus, dpkgRblnOthers)
+	if short, detail := rblnShortVersion(); short != "" || detail != "" {
+		t.Fatalf("short=%q detail=%q, want 빈 값(펌웨어·도구 패키지는 드라이버가 아니다)", short, detail)
+	}
+}
+
+func TestRblnShortVersionEmptyWithoutSources(t *testing.T) {
+	fakeSysModule(t)
+	if short, detail := rblnShortVersion(); short != "" || detail != "" {
+		t.Fatalf("short=%q detail=%q, want 빈 값", short, detail)
 	}
 }

@@ -2,7 +2,7 @@
 // scan.go: 노드 디바이스 스캔 능력 (PCI/드라이버/벤더 감지 → Snapshot)
 // 상세: 5벤더(NVIDIA/Furiosa Warboy/RNGD/Rebellions/Tenstorrent) PCI·드라이버 감지 로직 +
 // 공통 호스트 FS 헬퍼. 매 주기 1회 스캔해 Snapshot 을 만들고 소비자가 공유한다.
-// 생성일: 2026-03-25 | 수정일: 2026-10-11
+// 생성일: 2026-03-25 | 수정일: 2026-10-27
 // ============================================================
 package main
 
@@ -486,6 +486,7 @@ var (
 	}
 	pciIDsConfigPath    = "/etc/npu-detector/pci-ids.json" // 컨테이너 내부
 	hostSysPciDevices   = "/sys/bus/pci/devices"
+	hostSysModule       = "/sys/module"
 	hostVarDpkgStatus   = "/var/lib/dpkg/status"
 	markerDir           = "/var/lib/kcloud-operator"
 	legacyMarkerDir     = "/var/lib/npu-operator"
@@ -866,7 +867,7 @@ func rblnPciCount() int {
 }
 
 func rblnDriverLoaded() bool {
-	return fileExists(H("/sys/module/rebellions"))
+	return fileExists(H(filepath.Join(hostSysModule, "rebellions")))
 }
 
 func rblnPkgSummaryFromStatus() (driverVer string, detail string) {
@@ -874,8 +875,11 @@ func rblnPkgSummaryFromStatus() (driverVer string, detail string) {
 	if err != nil {
 		return "", ""
 	}
+	// 커널 드라이버 패키지만 본다. rebellions-fw·rebellions-tool·rbln-sdk 는 펌웨어·도구 버전이라
+	// 드라이버 버전으로 보고하면 틀린다. worker4(ATOM+) 의 실제 패키지 이름은 rebellions-dkms 다.
 	want := map[string]string{
-		"rebellions": "",
+		"rebellions-dkms": "",
+		"rebellions":      "",
 	}
 	lines := strings.Split(string(data), "\n")
 	var pkg, ver, status string
@@ -902,7 +906,10 @@ func rblnPkgSummaryFromStatus() (driverVer string, detail string) {
 	}
 	flush()
 
-	driverVer = want["rebellions"]
+	driverVer = want["rebellions-dkms"]
+	if driverVer == "" {
+		driverVer = want["rebellions"]
+	}
 	if driverVer != "" {
 		detail = fmt.Sprintf("driver=%s", driverVer)
 	}
@@ -910,7 +917,14 @@ func rblnPkgSummaryFromStatus() (driverVer string, detail string) {
 }
 
 func rblnShortVersion() (short, detail string) {
-	// 1) dpkg status 파싱 우선
+	// 1) 커널 모듈 버전 우선 — 모듈이 올라와 있으면 패키지 관리자와 무관하게 값이 있다.
+	if v := readFileTrim(H(filepath.Join(hostSysModule, "rebellions", "version"))); v != "" {
+		if reSemverish.MatchString(v) {
+			short = v
+		}
+		return short, fmt.Sprintf("driver=%s", v)
+	}
+	// 2) 모듈이 없을 때(미적재·재부팅 대기)는 설치된 드라이버 패키지에서 읽는다.
 	if dv, det := rblnPkgSummaryFromStatus(); dv != "" || det != "" {
 		if reSemverish.MatchString(dv) {
 			short = dv
