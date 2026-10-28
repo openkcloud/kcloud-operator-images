@@ -4,7 +4,7 @@
 # 상세: 발행 이미지는 Dockerfile.v17 의 INSTALL_METHOD=hostnamespace 로 이 경로를 탄다. ns·
 #       apt_wait 를 가짜 함수로 두고 실제 install_driver_pkg_on_host 를 source 해 부른다
 #       (복사본이 아니다). docker·컨테이너·host 접촉 없이 도는 순수 bash 시험이다.
-# 생성일: 2026-10-06 | 수정일: 2026-10-27
+# 생성일: 2026-10-06 | 수정일: 2026-10-28
 # ============================================================
 # shellcheck disable=SC2034
 # 파일 전체에 적용 — DRIVER_VERSION 대입은 source 한 entrypoint.sh 의 함수가 전역으로
@@ -37,7 +37,7 @@ ns() { ns_default "$@"; }
 apt_wait() { return 0; }
 
 # 각 사례는 자기 환경을 직접 설정한다(앞 사례 상태에 의존하지 않는다).
-reset() { : > "$installs"; : > "$err"; APT_RC=0; SRC_PKG=; DPKG_LIST=; DPKG_LIST_RC=0; }
+reset() { : > "$installs"; : > "$err"; APT_RC=0; SRC_PKG=; DPKG_LIST=; DPKG_LIST_RC=0; DRIVER_PKG_OPTS=; DRIVER_PKG_LIST=; DRIVER_PKG_PINNED=; }
 lines() { wc -l < "$installs" | tr -d ' '; }
 
 MADISON_BOTH=$'nvidia-driver-580 | 580.178.04-0ubuntu1 | https://archive.example jammy-updates/restricted amd64 Packages\nnvidia-driver-580 | 580.159.03-0ubuntu1 | https://archive.example jammy-updates/restricted amd64 Packages'
@@ -348,21 +348,19 @@ want30="nvidia-driver-580=580.159.03-0ubuntu1 nvidia-dkms-580=580.159.03-0ubuntu
 
 # (31) 고정 대상이 아니면 패키지 이름 하나·옵션 없음, 정책 버전이 저장소에 없으면 2.
 reset; DRIVER_VERSION=580; MADISON="$MADISON_BOTH"
-driver_pkg_args nvidia-driver-580 >/dev/null 2>&1
-[[ "$DRIVER_PKG_LIST" == "nvidia-driver-580" && -z "$DRIVER_PKG_OPTS" && -z "$DRIVER_PKG_PINNED" ]] \
-  || { echo "FAIL case31a: list=[$DRIVER_PKG_LIST] opts=[$DRIVER_PKG_OPTS] pinned=[$DRIVER_PKG_PINNED]"; exit 1; }
+DRIVER_PKG_OPTS=stale; DRIVER_PKG_LIST=stale; DRIVER_PKG_PINNED=stale   # 앞 호출이 남긴 값을 이 호출이 덮어쓰는지 직접 본다
+rc=0; driver_pkg_args nvidia-driver-580 >/dev/null 2>&1 || rc=$?
+[[ "$rc" -eq 0 && "$DRIVER_PKG_LIST" == "nvidia-driver-580" && -z "$DRIVER_PKG_OPTS" && -z "$DRIVER_PKG_PINNED" ]] \
+  || { echo "FAIL case31a: rc=$rc (0 기대) list=[$DRIVER_PKG_LIST] opts=[$DRIVER_PKG_OPTS] pinned=[$DRIVER_PKG_PINNED]"; exit 1; }
 reset; DRIVER_VERSION=580.159.03; MADISON="$MADISON_ONLY_178"
 rc=0; driver_pkg_args nvidia-driver-580 >/dev/null 2>"$err" || rc=$?
 [[ "$rc" -eq 2 ]] || { echo "FAIL case31b: rc=$rc (2 기대)"; exit 1; }
 
-# (32) lib-only source 만으로 점검에 필요한 함수가 모두 정의된다(시험 stub 이 없는 새 셸).
-# shellcheck source=/dev/null
-( ENTRYPOINT_LIB_ONLY=1; source "$here/entrypoint.sh" >/dev/null 2>&1
-  declare -F apt_wait nvidia_gpu_bindings nvidia_has_installable_gpu driver_pkg_args >/dev/null ) \
-  || { echo "FAIL case32: lib-only source 에 점검 헬퍼가 없다"; exit 1; }
-# 위 서브셸은 이 시험의 apt_wait stub 을 물려받아 apt_wait 를 가드 뒤로 옮겨도 통과한다.
-# 새 프로세스로 apt_wait 만 한 번 더 확인한다.
-ENTRYPOINT_LIB_ONLY=1 bash -c 'source "$1" >/dev/null 2>&1; declare -F apt_wait >/dev/null' _ "$here/entrypoint.sh" \
-  || { echo "FAIL case32: 새 프로세스의 lib-only source 에 apt_wait 가 없다"; exit 1; }
+# (32) lib-only source 만으로 점검에 필요한 함수가 모두 정의된다. 이 시험의 stub(apt_wait 등)을 물려받으면 가드 뒤로 옮겨도 통과하므로
+#      새 프로세스에서 확인하고, 빠진 함수 이름을 모두 낸다.
+missing32="$(ENTRYPOINT_LIB_ONLY=1 bash -c 'source "$1" >/dev/null 2>&1
+  for f in apt_wait nvidia_gpu_bindings nvidia_has_installable_gpu driver_pkg_args; do declare -F "$f" >/dev/null || echo "$f"; done' _ "$here/entrypoint.sh")"
+[[ -z "$missing32" ]] \
+  || { echo "FAIL case32: lib-only source 만으로 정의돼야 하는 점검 헬퍼가 새 프로세스에 없다: $(tr '\n' ' ' <<< "$missing32")"; exit 1; }
 
 echo "PASS: host-pinned-version_test"

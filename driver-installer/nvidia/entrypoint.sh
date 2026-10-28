@@ -148,6 +148,12 @@ prebuilt_ko_version() {
   return 1
 }
 
+# ============================================================================ #
+# apt / dpkg helpers — apt_wait 는 설치 전 점검(preflight.sh)과 설치 단계가 함께 부르므로 ENTRYPOINT_LIB_ONLY 가드 앞에 둔다(나머지는 설치 단계용)
+# ============================================================================ #
+
+# apt_wait: host 의 dpkg/apt 잠금이 풀릴 때까지 2초 간격으로 최대 180회 기다린다(풀리면 0, 시간 초과면 오류를 적고 1).
+#   apt 를 부르는 모든 경로(설치·고정 설치·사전 컴파일 설치·설치 전 점검)가 먼저 부르며, host 를 건드리므로 시험은 가짜로 덮는다.
 apt_wait() {
   ns "bash -lc '
     for i in {1..180}; do
@@ -161,6 +167,16 @@ apt_wait() {
     echo \"[ERR] dpkg/apt lock held too long\" >&2
     exit 1
   '"
+}
+
+apt_update() {
+  apt_wait || { log_error "apt/dpkg 잠금 대기 실패"; return 1; }
+  ns "apt-get update -y" || { log_error "apt-get update failed"; return 1; }
+}
+
+apt_install() {
+  apt_wait || { log_error "apt/dpkg 잠금 대기 실패"; return 1; }
+  ns "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $*" || return 1
 }
 
 # ============================================================================ #
@@ -216,7 +232,10 @@ nvidia_has_installable_gpu() {
 #   apt 패키지 버전을 찾는다. x.y(.z) 꼴일 때만 고정 대상이다(major 만 적은 580 같은 값은
 #   계열 설치, 고정 안 함). `apt-cache madison` 에서 epoch 를 뗀 값이 접두 일치하는 첫 항목을
 #   epoch 포함 원문으로 stdout 에 내고 0, 없으면 후보를 stderr 에 적고 1(대체 없음). 고정
-#   대상이 아니면 빈 출력·0(종전 계열 설치).
+#   대상이 아니면 빈 출력·0(종전 계열 설치). 호출부가 PIN_LOOKUP_QUIET 를 켜면(설치 전 점검: PPA 추가
+#   전이라 부재가 정상) 아무것도 적지 않고 1 만 돌려준다 — 부재를 어떻게 알릴지는 호출부가 정한다(run_preflight 는
+#   판정 불가 경고 한 줄을 로그와 종료 메시지에 같은 문장으로 남기므로, 여기서도 적으면 같은 사실이 두 번 남는다).
+#   호출부가 $(...) 로 값을 받으므로 stdout 에는 값 말고 아무것도 쓰지 않는다.
 resolve_pinned_pkg_version() {
   local pkg="$1" want="${DRIVER_VERSION:-}"
   if [[ ! "${want}" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
@@ -230,6 +249,7 @@ resolve_pinned_pkg_version() {
       echo "${ver}"; return 0
     fi
   done < <(ns "apt-cache madison ${pkg}" 2>/dev/null)
+  [[ -z "${PIN_LOOKUP_QUIET:-}" ]] || return 1
   log_error "정책 버전 ${want} 의 ${pkg} 가 host 저장소에 없다. 후보: $(ns "apt-cache madison ${pkg}" 2>/dev/null | awk -F'|' '{gsub(/[ \t]/,"",$2); print $2}' | tr '\n' ' ')"
   log_error "정책 version 을 저장소에 있는 버전으로 바꾸거나 커널별 사전 컴파일 이미지(kernelImages)를 쓴다"
   return 1
@@ -260,23 +280,34 @@ installed_sibling_pkgs() {
 #   값이다(kcloud-operator internal/driverjob/preflightjob.go). 값을 바꾸면 두 곳을 함께 바꾼다.
 EXIT_HOLD_CONFLICT=3
 
-# unmet_dep_pkgs <apt 출력 파일>: "unmet dependencies" 절에 나온 패키지(왼쪽 패키지와 Depends·
-#   PreDepends·Breaks·Conflicts 대상)를 한 줄에 하나 낸다. 아키텍처 접미사는 뗀다.
-unmet_dep_pkgs() {
+# unmet_dep_targets <apt 출력 파일>: "unmet dependencies" 절의 의존 대상(Depends·PreDepends·Breaks·
+#   Conflicts 오른쪽)을 한 줄에 하나 낸다. 아키텍처 접미사는 뗀다.
+unmet_dep_targets() {
   awk '
     /^The following packages have unmet dependencies:/ { s = 1; next }
     s && /^E:/ { s = 0 }
     s {
       line = $0
-      if (match(line, /^ *[^ ]+ :/)) {
-        n = substr(line, RSTART, RLENGTH); sub(/ :$/, "", n); gsub(/ /, "", n); sub(/:.*/, "", n); print n
-      }
       while (match(line, /(Pre)?Depends: [^ ]+|Breaks: [^ ]+|Conflicts: [^ ]+/)) {
         t = substr(line, RSTART, RLENGTH); sub(/^[A-Za-z]+: /, "", t); sub(/:.*/, "", t); print t
         line = substr(line, RSTART + RLENGTH)
       }
     }' "$1" | sort -u
 }
+
+# unmet_dep_requirers <apt 출력 파일>: 같은 절에서 의존을 요구하는 쪽(줄 맨 앞 "<패키지> :")을 낸다.
+unmet_dep_requirers() {
+  awk '
+    /^The following packages have unmet dependencies:/ { s = 1; next }
+    s && /^E:/ { s = 0 }
+    s && match($0, /^ *[^ ]+ :/) {
+      n = substr($0, RSTART, RLENGTH); sub(/ :$/, "", n); gsub(/ /, "", n); sub(/:.*/, "", n); print n
+    }' "$1" | sort -u
+}
+
+# unmet_dep_pkgs <apt 출력 파일>: 두 목록의 합집합. 운영 코드는 부르지 않는다 — hold 지목(held_conflict_pkgs)은 두 목록을
+#   따로 읽는다. 호출부는 단위 시험(held-conflict_test.sh 사례 1)뿐이다.
+unmet_dep_pkgs() { { unmet_dep_targets "$1"; unmet_dep_requirers "$1"; } | sort -u; }
 
 # held_change_pkgs <apt 출력 파일>: "held packages will be changed" 절의 패키지를 낸다(설치
 #   목록에 hold 된 패키지가 든 경우). 아키텍처 접미사는 뗀다.
@@ -288,25 +319,31 @@ held_change_pkgs() {
 }
 
 # held_conflict_pkgs <apt 출력 파일>: 이 거절에 걸린 hold 패키지를 낸다. unmet 절은 apt-mark
-#   showhold 와 교집합만 본다 — "held broken packages" 문구는 hold 가 없어도 나온다.
+#   showhold 와 교집합만 본다 — "held broken packages" 문구는 hold 가 없어도 나온다. 의존 대상 쪽
+#   (unmet_dep_targets)의 hold 를 먼저 지목하고, 그쪽에 hold 가 없을 때만 요구하는 쪽(unmet_dep_requirers)의
+#   hold 를 쓴다 — 대상이 hold 면 그것이 막은 원인이고, 요구하는 쪽까지 지목하면 unhold 안내가 넓어진다.
+#   "held packages will be changed" 절의 패키지는 교집합과 무관하게 더한다.
 held_conflict_pkgs() {
-  local holds
+  local holds hits=""
   holds="$(ns "apt-mark showhold" 2>/dev/null | sed 's/:.*//' | sort -u)" || holds=""
   {
     if [[ -n "${holds}" ]]; then
-      unmet_dep_pkgs "$1" | grep -Fx -f <(printf '%s\n' "${holds}") || true
+      hits="$(unmet_dep_targets "$1" | grep -Fx -f <(printf '%s\n' "${holds}") || true)"
+      [[ -n "${hits}" ]] || hits="$(unmet_dep_requirers "$1" | grep -Fx -f <(printf '%s\n' "${holds}") || true)"
+      [[ -z "${hits}" ]] || printf '%s\n' "${hits}"
     fi
     held_change_pkgs "$1"
   } | sort -u
 }
 
 # hold_conflict_message <apt 출력 파일> <hold 패키지 목록>: 상태·이벤트에 그대로 실릴 한 줄.
-#   hold 패키지 이름을 맨 앞에 두고 apt 의 거절 줄을 최대 세 줄 붙인다. 세 줄은 grep -m3 로 자른다 —
-#   head 로 자르면 출력이 클 때 grep 이 SIGPIPE 로 끝나 pipefail 아래서 거절 줄이 빈 값이 된다.
+#   hold 패키지 이름을 맨 앞에 두고 apt 의 거절 줄(Depends·PreDepends·Breaks·Conflicts 줄, E: 줄)을 최대
+#   세 줄 붙인다. 세 줄은 grep -m3 로 자른다 — head 로 자르면 출력이 클 때 grep 이 SIGPIPE 로 끝나
+#   pipefail 아래서 거절 줄이 빈 값이 된다.
 hold_conflict_message() {
   local held lines
   held="$(printf '%s\n' "$2" | paste -sd' ' -)"
-  lines="$(grep -m3 -E ' : (Pre)?Depends: |^E: ' "$1" | sed 's/^ *//' | paste -sd' ' -)" || lines=""
+  lines="$(grep -m3 -E ' : (Pre)?Depends: | : Breaks: | : Conflicts: |^E: ' "$1" | sed 's/^ *//' | paste -sd' ' -)" || lines=""
   printf 'hold 된 패키지(%s)가 드라이버 설치를 막는다 — %s — 노드에서 apt-mark showhold 로 확인하고, hold 를 풀지는 노드 이미지 관리자가 정한다(apt-mark unhold %s)' \
     "${held}" "${lines}" "${held}"
 }
@@ -317,11 +354,35 @@ write_termination_message() {
   printf '%s' "$1" | head -c 2048 | iconv -c -f UTF-8 -t UTF-8 2>/dev/null >"${TERMINATION_LOG:-/dev/termination-log}" || true
 }
 
-# simulate_driver_install <출력 파일>: DRIVER_PKG_OPTS·DRIVER_PKG_LIST 설치를 apt 로 모의(-s -y)하고
-#   출력을 파일에 쓴다. apt 의 종료 상태를 돌려준다. 실제 설치와 같은 인자다. 이 출력의 영어 문구를
-#   파싱하므로 LC_ALL=C 로 번역을 끈다(출력을 읽지 않는 실제 설치 명령에는 붙이지 않는다).
+# dkms_build_pkgs: DKMS 로 모듈을 빌드할 때 설치 경로가 apt 로 까는 빌드 도구. 헤더·모듈 확인 뒤의 빌드 도구
+#   설치와 설치 전 점검이 이 목록을 쓴다(기반 도구 설치 줄의 build-essential dkms 는 따로 적혀 있다).
+dkms_build_pkgs() { printf '%s' "build-essential dkms gcc make"; }
+
+# kernel_headers_present <커널>·kernel_modules_present <커널>: 호스트에 그 커널의 헤더·모듈 디렉터리가
+#   있는지. 설치 경로(없으면 apt 설치)와 설치 전 점검(없으면 모의 설치 목록에 추가)이 같은 판정을 쓴다.
+kernel_headers_present() { ns "[[ -d /usr/src/linux-headers-$1 ]]"; }
+kernel_modules_present() { ns "[[ -d /lib/modules/$1 ]]"; }
+
+# missing_kernel_pkgs <커널>: 호스트에 없어 설치 경로가 apt 로 깔 커널 패키지 이름을 낸다(없으면 빈 값).
+missing_kernel_pkgs() {
+  local out=""
+  kernel_headers_present "$1" || out="linux-headers-$1"
+  kernel_modules_present "$1" || out="${out:+${out} }linux-modules-extra-$1"
+  printf '%s' "${out}"
+}
+
+# simulate_apt_install <출력 파일> <apt 인자>: apt 설치를 모의(-s -y)하고 출력을 파일에 쓴다. apt 의
+#   종료 상태를 돌려준다. 출력의 영어 문구를 파싱하므로 LC_ALL=C 로 번역을 끈다(출력을 읽지 않는
+#   실제 설치 명령에는 붙이지 않는다). 인자는 호출부가 정한다. 빌드 도구는 설치 경로의 apt_install 과
+#   같은 인자(--no-upgrade 포함)로 모의한다(run_preflight 참고).
+simulate_apt_install() {
+  ns "LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get -s -y install $2" >"$1" 2>&1
+}
+
+# simulate_driver_install <출력 파일>: DRIVER_PKG_OPTS·DRIVER_PKG_LIST 설치를 모의하고 출력을 파일에
+#   쓴다. apt 의 종료 상태를 돌려준다. 실제 설치와 같은 인자다.
 simulate_driver_install() {
-  ns "LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get -s -y install ${DRIVER_PKG_OPTS:+${DRIVER_PKG_OPTS} }${DRIVER_PKG_LIST}" >"$1" 2>&1
+  simulate_apt_install "$1" "${DRIVER_PKG_OPTS:+${DRIVER_PKG_OPTS} }${DRIVER_PKG_LIST}"
 }
 
 # classify_hold_conflict <apt 출력 파일>: 이 apt 거절이 hold 충돌인지 판정한다. 충돌이면
@@ -414,11 +475,13 @@ collect_reboot_guard_state() {
 }
 
 # reboot_defer_applicable: 재부팅 유예 가드(cross-major 전이와 같은 계열 patch 교체). PIN_FAILED 를
-#   첫 조건으로 두는 이유 — 고정 실패 뒤에는 정책이 아닌 버전이 디스크에 있을 수 있다. 정책이
-#   x.y.z 이면 디스크 모듈이 그 patch 와 같고 로드된 모듈이 그 patch 가 아닐 때 참이다(같은 계열
-#   patch 교체 포함). major 만 적은 정책은 로드된 major 가 다를 때 참이다. 부팅 뒤 검증기
-#   (internal/validator/validator.go:117)는 로드된 모듈 버전만 보고 dpkg 메타패키지는 읽지 않는다.
-#   사전 컴파일은 메타패키지를 설치하지 않아 그 값이 옛 apt 이력이므로 조건에 넣지 않는다.
+#   첫 조건으로 두는 이유 — PIN_FAILED=1 은 정책 버전 고정 실패(후보가 2)와 hold 충돌(후보가 3)에서 선다.
+#   고정 실패 뒤에는 정책이 아닌 버전이 디스크에 있을 수 있고, hold 충돌을 유예하면 정상 종료(재부팅 위임)로
+#   가려지므로 둘 다 유예하지 않고 exit_install_failed 로 보낸다(hold 충돌은 종료 코드 3). 정책이 x.y.z 이면
+#   디스크 모듈이 그 patch 와 같고 로드된 모듈이 그 patch 가 아닐 때 참이다(같은 계열 patch 교체 포함). major 만
+#   적은 정책은 로드된 major 가 다를 때 참이다. 부팅 뒤 검증기(internal/validator/validator.go:117)는 로드된
+#   모듈 버전만 보고 dpkg 메타패키지는 읽지 않는다. 사전 컴파일은 메타패키지를 설치하지 않아 그 값이 옛 apt
+#   이력이므로 조건에 넣지 않는다.
 reboot_defer_applicable() {
   [[ "${PIN_FAILED:-0}" != "1" \
         && -n "${EXPECTED_MAJOR}" && "${TARGET_PKG_OK}" -ge 1 \
@@ -452,7 +515,7 @@ loaded_needs_reboot() {
 #   결과를 보지 못한다.
 install_from_candidates() {
   INSTALL_SUCCESS=0
-  # 고정 실패 표식 — reboot_defer_applicable 이 읽는다. set -u 때문에 루프 앞에서 초기화한다.
+  # 고정 실패·hold 충돌 표식 — reboot_defer_applicable 이 읽는다. set -u 때문에 루프 앞에서 초기화한다.
   PIN_FAILED=0
   HOLD_CONFLICT=0
   for cand in "${DRIVER_CANDIDATES[@]}"; do
@@ -504,8 +567,9 @@ apply_reboot_defer() {
 }
 
 # exit_install_failed: 모든 후보가 실패했을 때 사유를 종료 메시지에 쓰고 프로세스를 끝낸다. hold 충돌
-#   (HOLD_CONFLICT=1)이면 EXIT_HOLD_CONFLICT 로, 그 밖이면 1 로 끝난다. 단위 시험이 하위 셸에서 종료
-#   상태와 종료 메시지를 확인할 수 있도록 가드 앞에 둔다. 호출부는 "모든 후보 실패" 분기 한 곳이다.
+#   (HOLD_CONFLICT=1)이면 EXIT_HOLD_CONFLICT 로, 그 밖이면 1 로 끝난다. 재부팅 유예(apply_reboot_defer)가 정상 종료로
+#   끝나지 않은 경우에만 오며, hold 충돌은 PIN_FAILED 가 유예를 막으므로 항상 여기서 끝난다. 단위 시험이 하위 셸에서
+#   종료 상태와 종료 메시지를 확인할 수 있도록 가드 앞에 둔다. 호출부는 "모든 후보 실패" 분기 한 곳이다.
 exit_install_failed() {
   if [[ "${HOLD_CONFLICT:-0}" == "1" ]]; then
     write_termination_message "${HOLD_CONFLICT_MSG:-hold 된 호스트 패키지가 드라이버 설치를 막는다}"
@@ -516,12 +580,43 @@ exit_install_failed() {
   exit 1
 }
 
+# detect_existing_driver_version: 호스트의 NVIDIA 드라이버 버전을 전역 EXISTING_VER 에, 출처를
+#   EXISTING_VER_SOURCE(loaded|package)에 둔다. 로드된 모듈이 먼저, 없으면 설치된 nvidia-driver-*
+#   패키지의 upstream 버전. 없으면 둘 다 빈 값. /proc/driver/nvidia/version 은 있으나 버전을 읽지 못하면
+#   EXISTING_VER_UNPARSED=1(그 밖은 0)로 알린다 — 설치 경로가 그 경우의 경고를 남긴다. stdout 에 쓰지 않는다
+#   (호출부가 값을 캡처하지 않는다).
+detect_existing_driver_version() {
+  EXISTING_VER=""; EXISTING_VER_SOURCE=""; EXISTING_VER_UNPARSED=0
+  if ns "test -f /proc/driver/nvidia/version" 2>/dev/null; then
+    EXISTING_VER="$(ns "cat /proc/driver/nvidia/version 2>/dev/null" | parse_nvrm_version || true)"
+    [[ -z "${EXISTING_VER}" ]] || EXISTING_VER_SOURCE="loaded"
+    [[ -n "${EXISTING_VER}" ]] || EXISTING_VER_UNPARSED=1
+  fi
+  # driver-manager 가 모듈을 해제한 경우에도 설치된 패키지 버전을 본다.
+  if [[ -z "${EXISTING_VER}" ]]; then
+    local pkg
+    pkg="$(ns "dpkg-query -W -f='\${Status} \${Version}\n' 'nvidia-driver-*' 2>/dev/null | grep '^install' | awk '{print \$4}' | head -1" || true)"
+    if [[ -n "${pkg}" ]]; then
+      # dpkg 버전에서 upstream 버전만 추출 (580.126.09-0ubuntu... → 580.126.09)
+      EXISTING_VER="$(echo "${pkg}" | grep -oP '^[0-9]+\.[0-9]+\.[0-9]+' || echo "${pkg}")"
+      EXISTING_VER_SOURCE="package"
+    fi
+  fi
+}
+
+# host_driver_adopted: VERSION_SOURCE=Host 이고 호스트에 드라이버가 있으면 0 — 설치기는 그 버전을
+#   채택하고 설치하지 않는다. 설치 경로와 설치 전 점검이 이 판정 하나를 쓴다.
+host_driver_adopted() { [[ "${VERSION_SOURCE:-Policy}" == "Host" && -n "${EXISTING_VER:-}" ]]; }
+
 # run_preflight: 설치 전 점검. 설치가 쓸 apt 인자로 모의 설치(-s -y)를 돌려 hold 된 호스트 패키지가
-#   설치를 막는지 본다. 호스트에는 apt 목록 갱신만 하고 패키지를 설치·제거·hold 하지 않는다.
+#   설치를 막는지 본다. 드라이버 세트가 통과하면 DKMS 빌드에 필요한 커널 헤더·빌드 도구도 설치 경로와 같은
+#   인자(빌드 도구는 --no-upgrade)로 모의 설치한다. VERSION_SOURCE=Host 이고 호스트에 드라이버가 있으면
+#   설치기가 그 버전을 채택하고 설치하지 않으므로 점검하지 않는다. 호스트에는 apt 목록 갱신만 하고 패키지를
+#   설치·제거·hold 하지 않는다.
 #   반환: 0 통과 또는 점검 대상 아님, EXIT_HOLD_CONFLICT hold 충돌, 1 판정 불가(operator 는 설치를
 #   막지 않는다). 사유는 종료 메시지에 남긴다. preflight.sh 가 부른다.
 run_preflight() {
-  local major sim msg
+  local major sim msg kpkgs
   if [[ "${SKIP_ON_PASSTHROUGH:-true}" != "false" ]] && ! nvidia_has_installable_gpu; then
     log_info "설치 전 점검: GPU 가 모두 vfio-pci 에 묶여 설치 대상이 없다 — 통과"
     return 0
@@ -531,17 +626,30 @@ run_preflight() {
     log_info "설치 전 점검: ${CURRENT_KERNEL} 용 사전 컴파일 .deb 를 써 apt 메타패키지 설치를 점검하지 않는다 — 통과"
     return 0
   fi
+  detect_existing_driver_version
+  if host_driver_adopted; then
+    log_info "설치 전 점검: VERSION_SOURCE=Host 이고 호스트 드라이버 ${EXISTING_VER} 가 있어 설치기가 그 버전을 채택한다 — 통과"
+    return 0
+  fi
   major="${DRIVER_VERSION:-}"
   major="${major%%.*}"
   if [[ ! "${major}" =~ ^[0-9]+$ ]]; then
     log_info "설치 전 점검: DRIVER_VERSION(${DRIVER_VERSION:-unset})이 계열 번호로 시작하지 않아 점검하지 않는다 — 통과"
     return 0
   fi
-  if ! apt_wait || ! ns "apt-get update -y"; then
+  msg=""
+  if ! apt_wait; then
+    msg="설치 전 점검 판정 불가: apt/dpkg 잠금 대기 실패 — 설치 단계가 다시 시도한다"
+  elif ! ns "apt-get update -y"; then
     msg="설치 전 점검 판정 불가: apt 목록 갱신 실패 — 설치 단계가 다시 시도한다"
+  fi
+  if [[ -n "${msg}" ]]; then
     log_warn "${msg}"; write_termination_message "${msg}"
     return 1
   fi
+  # 점검은 PPA 추가 전이라 정책 버전이 저장소에 없는 것이 정상일 수 있다. 조회 함수는 아무것도 적지 않게(PIN_LOOKUP_QUIET) 하고
+  # 아래 판정 불가 경고 한 줄이 로그와 종료 메시지를 겸한다. 설치 경로로 새지 않도록 local 로 둔다.
+  local PIN_LOOKUP_QUIET=1
   if ! driver_pkg_args "nvidia-driver-${major}"; then
     msg="설치 전 점검 판정 불가: 정책 버전 ${DRIVER_VERSION} 을 저장소에서 찾지 못했다(PPA 추가 전 판정) — 설치 단계가 다시 확인한다"
     log_warn "${msg}"; write_termination_message "${msg}"
@@ -549,7 +657,23 @@ run_preflight() {
   fi
   sim="$(mktemp)"
   if simulate_driver_install "${sim}"; then
-    log_info "설치 전 점검 통과: ${DRIVER_PKG_LIST}"
+    # 드라이버 세트가 통과해도 DKMS 빌드에 필요한 헤더·빌드 도구가 hold 에 막히면 설치 단계의 빌드가 실패한다.
+    # 설치 경로의 빌드 도구 설치(apt_install --no-upgrade)와 같은 인자다 — 이미 설치된 도구는 올리지 않으므로
+    # hold 된 옛 버전이어도 막지 않고, 설치되지 않은 패키지가 깔리는지만 본다.
+    kpkgs="$(missing_kernel_pkgs "${CURRENT_KERNEL}")"
+    if simulate_apt_install "${sim}" "--no-upgrade --no-install-recommends${kpkgs:+ ${kpkgs}} $(dkms_build_pkgs)"; then
+      log_info "설치 전 점검 통과: ${DRIVER_PKG_LIST} + $(dkms_build_pkgs)"
+      rm -f "${sim}"
+      return 0
+    fi
+    if classify_hold_conflict "${sim}"; then
+      write_termination_message "${HOLD_CONFLICT_MSG}"
+      rm -f "${sim}"
+      return "${EXIT_HOLD_CONFLICT}"
+    fi
+    # hold 와 무관한 실패(예: 이 커널의 헤더 패키지가 저장소에 없음)는 설치 경로도 경고만 하고 넘어가므로 통과다.
+    # 한계: 헤더 패키지가 저장소에 없으면 apt 가 거기서 먼저 멈춰 같은 명령의 빌드 도구 hold 충돌은 가려지고 통과한다.
+    log_warn "설치 전 점검: 헤더·빌드 도구 모의 설치가 hold 와 무관하게 실패 — $(grep -m1 '^E: ' "${sim}" || echo 'E: 사유 미상') — 설치 단계에서 다시 시도한다"
     rm -f "${sim}"
     return 0
   fi
@@ -697,19 +821,6 @@ choose_driver_candidates() {
 }
 
 # ============================================================================ #
-# apt / dpkg helpers
-# ============================================================================ #
-apt_update() {
-  apt_wait || { log_error "apt/dpkg 잠금 대기 실패"; return 1; }
-  ns "apt-get update -y" || { log_error "apt-get update failed"; return 1; }
-}
-
-apt_install() {
-  apt_wait || { log_error "apt/dpkg 잠금 대기 실패"; return 1; }
-  ns "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $*" || return 1
-}
-
-# ============================================================================ #
 # Driver health check
 # ============================================================================ #
 driver_healthy() {
@@ -735,6 +846,10 @@ driver_healthy() {
   fi
   return 0
 }
+
+# ============================================================================ #
+# 안전장치 헬퍼: 버전 비교(다운그레이드 가드) · DKMS 로그 출력
+# ============================================================================ #
 
 # 버전 비교: $1 > $2 이면 0(true). dpkg 로 정상 비교되면 그 결과, 형식오류 등으로
 # dpkg 가 판정 불가하면 major 정수 비교로 fallback.
@@ -958,7 +1073,7 @@ ns "bash -lc '
 # --- BASE TOOLS ---
 log_info "Apt update + base tools"
 apt_update
-apt_install ubuntu-drivers-common jq curl gnupg ca-certificates software-properties-common build-essential dkms || true
+apt_install --no-upgrade ubuntu-drivers-common jq curl gnupg ca-certificates software-properties-common build-essential dkms || true
 
 log_info "Ensuring NVIDIA PPA"
 ns "add-apt-repository -y ppa:graphics-drivers/ppa >/dev/null 2>&1 || true"
@@ -973,7 +1088,7 @@ if select_prebuilt_deb "${CURRENT_KERNEL}" >/dev/null 2>&1; then
   # 동봉 모듈을 가리는 일이 원천 차단된다. 헤더가 이미 있는 호스트는 postinst 가 여전히 빌드할 수
   # 있고, 그 경우 install_and_activate_driver 의 로드 후 검증이 버전 불일치를 잡아 실패시킨다.
   log_info "prebuilt .deb 동봉(${CURRENT_KERNEL}) — 커널 헤더 설치 생략(DKMS 빌드 차단)"
-elif ns "[[ -d /usr/src/linux-headers-${CURRENT_KERNEL} ]]"; then
+elif kernel_headers_present "${CURRENT_KERNEL}"; then
   log_info "Found kernel headers: /usr/src/linux-headers-${CURRENT_KERNEL}"
 else
   log_info "linux-headers-${CURRENT_KERNEL} not found; trying to install..."
@@ -983,7 +1098,7 @@ else
   fi
 fi
 
-if ns "[[ -d /lib/modules/${CURRENT_KERNEL} ]]"; then
+if kernel_modules_present "${CURRENT_KERNEL}"; then
   log_info "Found /lib/modules/${CURRENT_KERNEL}"
 else
   log_warn "/lib/modules/${CURRENT_KERNEL} not found; trying linux-modules-extra-${CURRENT_KERNEL}"
@@ -996,24 +1111,19 @@ ns "apt-mark hold linux-image-${CURRENT_KERNEL} || true"
 ns "apt-mark hold linux-headers-${CURRENT_KERNEL} || true"
 ns "apt-mark hold linux-modules-extra-${CURRENT_KERNEL} || true"
 
-apt_install build-essential dkms gcc make || true
+# 빠진 빌드 도구만 설치한다(--no-upgrade). 이미 설치된 지명 도구는 hold 여부와 무관하게 올리지 않는다. 설치 전 점검
+# (run_preflight)이 같은 인자로 모의 설치한다. 목록은 점검과 공유하며 공백으로 나뉘어 와야 하므로 단어 분리가 의도다.
+# shellcheck disable=SC2046
+apt_install --no-upgrade $(dkms_build_pkgs) || true
 
 # --- EXISTING DRIVER CHECK ---
-EXISTING_VER=""
-if ns "test -f /proc/driver/nvidia/version" 2>/dev/null; then
-  EXISTING_VER=$(ns "cat /proc/driver/nvidia/version 2>/dev/null" | parse_nvrm_version || true)
-  log_info "Existing NVIDIA driver detected (loaded): ${EXISTING_VER}"
-fi
-
-# driver-manager가 모듈을 해제한 경우에도 설치된 패키지 버전 확인
-if [[ -z "${EXISTING_VER}" ]]; then
-  INSTALLED_PKG_VER=$(ns "dpkg-query -W -f='\${Status} \${Version}\n' 'nvidia-driver-*' 2>/dev/null | grep '^install' | awk '{print \$4}' | head -1" || true)
-  if [[ -n "${INSTALLED_PKG_VER}" ]]; then
-    # dpkg 버전에서 upstream 버전만 추출 (580.126.09-0ubuntu... → 580.126.09)
-    EXISTING_VER=$(echo "${INSTALLED_PKG_VER}" | grep -oP '^[0-9]+\.[0-9]+\.[0-9]+' || echo "${INSTALLED_PKG_VER}")
-    log_info "Existing NVIDIA driver detected (package): ${EXISTING_VER}"
-  fi
-fi
+# 감지는 설치 전 점검과 같은 함수를 쓴다. 출처 loaded 는 로드된 모듈, package 는 driver-manager 가 모듈을
+# 해제한 뒤에도 남은 설치 패키지다. 모듈 파일은 있으나 버전을 읽지 못하고 패키지 폴백도 찾지 못하면 감지 로그가 나오지 않으므로 경고 한 줄을 남긴다
+# (감지 함수는 stdout 에 쓰지 않아야 해서 호출부인 여기서 남긴다).
+detect_existing_driver_version
+[[ "${EXISTING_VER_UNPARSED}" != "1" ]] \
+  || log_warn "/proc/driver/nvidia/version 은 있으나 로드된 모듈 버전을 읽지 못했다 — 설치된 패키지 버전을 확인한다"
+[[ -z "${EXISTING_VER_SOURCE}" ]] || log_info "Existing NVIDIA driver detected (${EXISTING_VER_SOURCE}): ${EXISTING_VER}"
 
 # unattended-upgrades blacklist 는 설치 여부와 무관하게 매 실행 적용한다(멱등) — operator 가
 # 드라이버 버전을 소유하므로 idle(설치 skip) 노드에서도 호스트가 대역외로 드라이버를 못 바꾸게 한다.
@@ -1024,7 +1134,7 @@ write_unattended_blacklist && log_info "unattended-upgrades nvidia blacklist 적
 # VERSION_SOURCE=Host 이고 호스트에 드라이버가 설치돼 있으면 그 버전을 effective desired 로
 # 채택하고 설치를 보류(존중)한다. 호스트에 드라이버가 없으면 policy DRIVER_VERSION 으로 fallback.
 if [[ "${VERSION_SOURCE:-Policy}" == "Host" ]]; then
-  if [[ -n "${EXISTING_VER}" ]]; then
+  if host_driver_adopted; then
     log_info "VERSION_SOURCE=Host, adopting existing host driver ${EXISTING_VER} as desired (skip install)"
     DRIVER_VERSION="${EXISTING_VER}"
     SKIP_DRIVER_INSTALL=1
@@ -1112,7 +1222,8 @@ if [[ "${SKIP_DRIVER_INSTALL:-0}" != "1" ]]; then
     # 설치됐고 신 모듈은 재부팅 후 로드된다. install 실패로 처리하면 needs-reboot 마커가 안 남아
     # operator 의 RebootRequired→reboot 경로가 발화하지 못한다. TARGET_PKG_OK(타겟 설치 완료)·
     # DISK_MOD_MAJOR/VER(디스크 모듈이 신 버전으로 빌드됨)·ACTIVE_MAJOR/ACTIVE_NVRM(현재 로드 버전)·
-    # PIN_FAILED(고정 실패면 가드 skip) 네 신호가 모두 맞으면 마커를 남기고 정상 종료해 재부팅에 위임한다.
+    # PIN_FAILED(고정 실패·hold 충돌이면 가드 skip) 네 신호가 모두 맞으면 마커를 남기고 정상 종료해 재부팅에 위임한다.
+    # hold 충돌은 PIN_FAILED 로 가드를 건너뛰고 아래 exit_install_failed 가 종료 코드 3 으로 먼저 끝낸다.
     collect_reboot_guard_state
     ACTIVE_NVRM=$(ns "cat /proc/driver/nvidia/version 2>/dev/null" | parse_nvrm_version || echo "")
     ACTIVE_MAJOR="${ACTIVE_NVRM%%.*}"
