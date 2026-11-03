@@ -1,7 +1,7 @@
 // ============================================================
 // label_test.go: NFD/GFD 라벨 계산 단위 테스트
 // 상세: computeLabels(순수) 라벨 집합 + sanitizeLabelValue 정규화 검증.
-// 생성일: 2026-07-16 | 수정일: 2026-10-11
+// 생성일: 2026-07-16 | 수정일: 2026-11-03
 // ============================================================
 package main
 
@@ -28,7 +28,8 @@ func TestComputeLabels_Nvidia(t *testing.T) {
 		"kcloud.ai/nvidia.count":                      "2",
 		"kcloud.ai/driver-nvidia.loaded":              "true",
 		"kcloud.ai/driver-nvidia.version":             "580.65.06",
-		"kcloud.ai/gpu.present":                       "true",
+		"kcloud.ai/accelerator.present":               "true",
+		"kcloud.ai/gpu.present":                       "true", // 옛 이름, 0.9 에서 제거
 		"kcloud.ai/nvidia.present":                    "true",
 		"feature.node.kubernetes.io/pci-10de.present": "true",
 	}

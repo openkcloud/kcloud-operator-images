@@ -2,7 +2,7 @@
 // label.go: node-agent NFD/GFD 라벨링 능력
 // 상세: Snapshot 으로부터 kcloud.ai/* 와 NFD pci-present 라벨을 계산해 노드에 patch 한다.
 // kcloud.ai/* 는 완전 재조정(add/update/remove)하고, NFD 는 충돌 회피를 위해 add/update-only 다.
-// 생성일: 2026-07-16 | 수정일: 2026-10-11
+// 생성일: 2026-07-16 | 수정일: 2026-11-03
 // ============================================================
 package main
 
@@ -106,7 +106,12 @@ func computeLabels(snap *Snapshot) map[string]string {
 			labels[labelPrefix+key+".product"] = products[key]
 		}
 	}
-	// GFD 계열 — 가속기 존재(범용)
+	// GFD 계열 — 가속기 존재(범용). 벤더를 가리지 않고 장치가 하나라도 있으면 붙는다.
+	labels[labelPrefix+"accelerator.present"] = "true"
+	// gpu.present 는 accelerator.present 의 옛 이름이다. NVIDIA GFD 의 nvidia.com/gpu.present 를
+	// 따라 지었지만 NPU 노드에도 붙어 이름이 뜻과 어긋난다. 0.8.1 사용자가 셀렉터로 쓸 수 있어
+	// 한 릴리스 동안 함께 붙이고 다음 minor(0.9) 에서 뺀다 — 빼는 순간 완전 재조정이 전 노드에서
+	// 즉시 지우므로 그때 CHANGELOG 에 적는다.
 	labels[labelPrefix+"gpu.present"] = "true"
 	return labels
 }
