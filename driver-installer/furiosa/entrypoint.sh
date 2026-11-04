@@ -4,7 +4,7 @@
 # 상세: 모델 판별 → APT 소스 등록 → 드라이버 패키지 설치 → 모듈 로드 → 장치 검증 → 헬스
 #       모니터링 루프. 사전 컴파일 모듈이 동봉돼 있으면 버전 결합을 fail-closed 로 확인한 뒤
 #       그걸로 DKMS 빌드를 대체한다.
-# 생성일: 2026-09-09 | 수정일: 2026-10-11
+# 생성일: 2026-09-09 | 수정일: 2026-11-04
 # ============================================================
 set -euo pipefail
 
@@ -136,7 +136,9 @@ select_model() {
     rngd)
       PCI_DEVICE_ID="0x0001"
       PKG="furiosa-driver-rngd"
-      EXTRA_PKGS="furiosa-smi"
+      # furiosa-libsmi 를 함께 설치한다. furiosa-smi 2026.4.0 부터 libsmi 의존이 빠져
+      # smi 만 설치한 노드에는 libfuriosa_smi.so 가 없고, exporter 의 hostPath 마운트가 실패한다.
+      EXTRA_PKGS="furiosa-smi furiosa-libsmi"
       OPTIONAL_PKGS=""
       HOLD_PKGS="furiosa-driver-rngd furiosa-smi furiosa-libsmi"
       MODULES="furiosa_rngd"

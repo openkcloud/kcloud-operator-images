@@ -2,7 +2,7 @@
 # release-bundle.yaml: 태그 하나로 함께 발행할 이미지·태그의 묶음 목록
 # 상세: publish-bundle.yml 이 `bundle/<묶음 이름>` 태그 push 를 받아 해당 묶음을 읽고 항목마다
 #       별도 job 으로 발행한다. image 값은 images.yaml 의 키다. 공개 체인 제외 이미지는 여기 넣지 않는다.
-# 생성일: 2026-10-03 | 수정일: 2026-10-12
+# 생성일: 2026-10-03 | 수정일: 2026-11-04
 # ============================================================
 bundles:
   # 1.34 라인 설치를 막고 있는 두 이미지. operator 차트가 커맨드 인자
@@ -19,6 +19,9 @@ bundles:
   #   그 출력을 그대로 옮긴다. 두 저장소가 다 있으면 hack/bundle-check.sh 가 어긋남을 잡는다.
   #   nvidia-driver-ds 커널 이미지는 여기 없다 — NVIDIA .deb 를 동봉해 재배포가
   #   되므로 공개 묶음에서 제외한다(기본 vN 이미지는 NVIDIA 바이트가 없어 공개 대상).
+  #   furiosa-driver-ds 의 RNGD 커널 이미지도 같은 이유로 없다 — 벤더 DKMS 소스로 빌드한 .ko 를
+  #   동봉하는데 그 소스 머리글이 서면 허락 없는 복제·배포를 금한다(operator 저장소
+  #   deploy/kernel-image-targets.yaml 의 rngd publicBundle: false).
 
   # ⛔ 아직 이 태그를 push 하지 말 것. publish-bundle.yml 은 build-arg 를 images.yaml
   #   에서만 읽어 묶음 항목마다 다른 값을 넘길 수 없다. 사전 컴파일에는 커널마다 다른
@@ -27,12 +30,6 @@ bundles:
   #   DKMS 설치기 이미지가 커널 이미지 태그를 달고 발행된다. 항목별 build-arg 전달
   #   경로를 먼저 만들어야 한다. 그때까지 이 묶음은 발행 대상 선언으로만 쓴다.
   kernel-images:
-    - image: furiosa-driver-ds
-      tag: 2026.3.1-rngd-k5.15.0-171-generic-v1
-    - image: furiosa-driver-ds
-      tag: 2026.3.1-rngd-k5.15.0-191-generic-v1
-    - image: furiosa-driver-ds
-      tag: 2026.3.1-rngd-k6.8.0-138-generic-v1
     - image: tenstorrent-driver-ds
       tag: 2.11.0-k5.15.0-171-generic-v1
     - image: tenstorrent-driver-ds
