@@ -8,7 +8,7 @@
 #       사례 M 은 hold 지목 순서(의존 대상 쪽 먼저, 비면 요구하는 쪽)와 Breaks·Conflicts 거절 줄, 의존 대상
 #       파서의 분기별 고정 출력, 요구 쪽 지목의 아키텍처 접미사 제거, 두 절이 함께 있는 출력을 본다. 사례 14 는
 #       재부팅 유예가 가능한 호스트에서도 hold 충돌이 유예보다 먼저 종료 코드 3 으로 끝나는지 본다.
-# 생성일: 2026-10-27 | 수정일: 2026-10-28
+# 생성일: 2026-10-27 | 수정일: 2026-11-16
 # ============================================================
 # shellcheck disable=SC2034
 # 파일 전체에 적용 — 전역 대입(DRIVER_VERSION·TERMINATION_LOG 등)은 source 한 함수가 읽는다.
@@ -31,7 +31,7 @@ FIX_BOTH=$'The following packages have unmet dependencies:\n libx11-xcb1 : Depen
 MADISON_BOTH=$'nvidia-driver-580 | 580.178.04-0ubuntu1 | https://archive.example jammy-updates/restricted amd64 Packages\nnvidia-driver-580 | 580.159.03-0ubuntu1 | https://archive.example jammy-updates/restricted amd64 Packages'
 printf '%s\n' "$FIX_A" > "$tmp/a.out"; printf '%s\n' "$FIX_B" > "$tmp/b.out"
 printf '%s\n' "$FIX_N" > "$tmp/n.out"; printf '%s\n' "$FIX_ARCH" > "$tmp/arch.out"; printf '%s\n' "$FIX_BOTH" > "$tmp/both.out"
-# FIX_R: .91 k8s-worker1 실측(apt 2.4.9) — hold 된 형제 패키지는 고정 목록에서 빠져 unmet 절에 나오고, E: 줄이 다르다.
+# FIX_R: Ubuntu 22.04 노드 실측(apt 2.4.9) — hold 된 형제 패키지는 고정 목록에서 빠져 unmet 절에 나오고, E: 줄이 다르다.
 FIX_R=$'The following packages have unmet dependencies:\n nvidia-driver-580 : Depends: nvidia-utils-580 (= 580.126.09-0ubuntu0.22.04.1) but 580.178.04-0ubuntu0.22.04.1 is to be installed\n                     Recommends: libnvidia-compute-580:i386 (= 580.126.09-0ubuntu0.22.04.1) but it is not installable\n nvidia-utils-580 : Depends: nvidia-kernel-common-580-580.178.04\n                    Depends: libnvidia-compute-580 (>= 580.178.04) but 580.126.09-0ubuntu0.22.04.1 is to be installed\nE: Error, pkgProblemResolver::Resolve generated breaks, this may be caused by held packages.'
 printf '%s\n' "$FIX_R" > "$tmp/r.out"
 
