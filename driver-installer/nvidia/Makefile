@@ -3,7 +3,7 @@
 # 상세: Dockerfile.v17 로 nvidia-driver-ds 이미지를 빌드한다. 버전별 태그 vN.
 #       build-precompiled 는 커널 하나의 Ubuntu linux-modules-nvidia 를 서명 .ko 로
 #       링크해 함께 굽는다(태그 <driverVersion>-k<kernel>-<IMAGE_VARIANT>, 기본 v1).
-#       사내 미러는 REGISTRY=<사내 미러>/kcloud make ... 로 덮어쓴다.
+#       자체 미러는 REGISTRY=<자체 미러>/kcloud make ... 로 덮어쓴다.
 # 생성일: 2026-09-23 | 수정일: 2026-10-13
 # ============================================================
 

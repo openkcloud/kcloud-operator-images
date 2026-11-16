@@ -4,7 +4,7 @@
 # 생성일: 2026-04-22 | 수정일: 2026-09-09
 # ============================================================
 
-# 레지스트리와 이미지 태그. 사내 미러는 REGISTRY=<사내 미러>/kcloud make ... 로 덮어쓴다.
+# 레지스트리와 이미지 태그. 자체 미러는 REGISTRY=<자체 미러>/kcloud make ... 로 덮어쓴다.
 REGISTRY ?= ghcr.io/openkcloud
 IMG      ?= $(REGISTRY)/kcloud-tt-device-plugin:v0.1.0
 

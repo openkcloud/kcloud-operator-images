@@ -63,7 +63,7 @@ func buildDevices(snap *Snapshot) []map[string]any {
 		// 못 된다(카드 2장 이상이면 나머지 카드엔 거짓). NVIDIA MIG 관측·NPU 카드 식별 모두 per-PCI
 		// 부착이 필요하다 — PCI 가 없으면 rngd backend 의 deviceID() 가 model 폴백으로 카드를 전부
 		// 같은 ID 로 뭉개며, intent.ApplyHealth 의 장치별 제외도 PCI 가 없으면 못 한다. 소비자는
-		// 이미 "벤더당 entry 1개" 를 가정 못 한다(worker1 nvidia 2개) — count 합산은 fan-out 시
+		// 이미 "벤더당 entry 1개" 를 가정 못 한다(<nvidia-node> nvidia 2개) — count 합산은 fan-out 시
 		// entry 당 count=1 이라 보존되고, 주소 목록도 같은 match 함수에서 나와 개수가 일치한다.
 		pcis := snap.PciAddrs[vendorKey(d.vendor, d.model)]
 		isNvidia := strings.EqualFold(d.vendor, "nvidia")

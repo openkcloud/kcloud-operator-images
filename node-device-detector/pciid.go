@@ -14,8 +14,8 @@ import (
 // pciProduct 는 "<vendor>:<device>"(0x 접두 없는 소문자) → 제품명 표다.
 // 실측으로 확인한 것만 넣는다 — 지어낸 ID 는 fail-closed 판정을 조용히 무너뜨린다.
 var pciProduct = map[string]string{
-	"10de:20b7": "a30", // k8s-worker1 0000:18:00.0 (nvidia-smi 제품명과 대조)
-	"10de:25b6": "a2",  // k8s-worker1 0000:86:00.0 (nvidia-smi 제품명과 대조)
+	"10de:20b7": "a30", // <nvidia-node> 0000:18:00.0 (nvidia-smi 제품명과 대조)
+	"10de:25b6": "a2",  // <nvidia-node> 0000:86:00.0 (nvidia-smi 제품명과 대조)
 }
 
 // productFromPCI 는 sysfsRoot/<addr> 의 vendor·device ID 로 제품명을 찾는다.

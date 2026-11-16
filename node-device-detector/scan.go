@@ -462,11 +462,11 @@ var (
 		{Vendor: "0x1ed2", Device: "0x0001"}, // RNGD
 	}
 	// Tenstorrent Blackhole PCI IDs
-	// 0xb140 은 k8s-worker3 sysfs 실측값(/sys/bus/pci/devices/0000:af:00.0).
+	// 0xb140 은 <tenstorrent-node> sysfs 실측값(/sys/bus/pci/devices/0000:af:00.0).
 	// 0xb150 은 확인 못 한 placeholder 로 남긴다 — matchTenstorrent 가 벤더 ID 만으로
 	// 매칭하므로 목록 누락이 감지 실패로 이어지지는 않는다.
 	builtinTenstorrentIDs = []PciID{
-		{Vendor: "0x1e52", Device: "0xb140"}, // Blackhole P150 (worker3 실측)
+		{Vendor: "0x1e52", Device: "0xb140"}, // Blackhole P150 (<tenstorrent-node> 실측)
 		{Vendor: "0x1e52", Device: "0xb150"}, // (미확인)
 	}
 	// Rebellions Atom+ PCI IDs (공식 ConfigMap selectors 기준)
@@ -876,7 +876,7 @@ func rblnPkgSummaryFromStatus() (driverVer string, detail string) {
 		return "", ""
 	}
 	// 커널 드라이버 패키지만 본다. rebellions-fw·rebellions-tool·rbln-sdk 는 펌웨어·도구 버전이라
-	// 드라이버 버전으로 보고하면 틀린다. worker4(ATOM+) 의 실제 패키지 이름은 rebellions-dkms 다.
+	// 드라이버 버전으로 보고하면 틀린다. <rebellions-node>(ATOM+) 의 실제 패키지 이름은 rebellions-dkms 다.
 	want := map[string]string{
 		"rebellions-dkms": "",
 		"rebellions":      "",
@@ -952,7 +952,7 @@ func ttPciCount() int {
 		}
 		// builtinTenstorrentIDs 에 등록된 device ID 우선 매칭;
 		// 미등록 device ID 는 벤더 ID(0x1e52)만으로도 집계(신규 SKU 대응).
-		// TODO: k8s-worker3 lspci 결과로 0xb150 확인 후 정밀 매칭만 남길 것.
+		// TODO: <tenstorrent-node> lspci 결과로 0xb150 확인 후 정밀 매칭만 남길 것.
 		matched := false
 		for _, want := range builtinTenstorrentIDs {
 			if strings.EqualFold(d, want.Device) {

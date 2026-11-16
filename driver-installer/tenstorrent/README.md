@@ -83,7 +83,7 @@ air-gap 클러스터에서 노드마다 DKMS 로 빌드하는 시간과 빌드 �
 
 ```bash
 make build-precompiled \
-  REGISTRY=<사내 미러>/kcloud \
+  REGISTRY=<자체 미러>/kcloud \
   TT_KMD_VERSION=2.11.0 \
   KERNEL=5.15.0-190-generic
 ```

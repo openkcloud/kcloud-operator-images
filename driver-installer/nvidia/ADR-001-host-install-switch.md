@@ -9,7 +9,7 @@
 ## 맥락
 
 사용자 L40S fresh 서비스 클러스터에서 operator 배포만으로는 GPU 파드가 전부 실패했다.
-개발 클러스터는 worker1 의 **host 드라이버 설치 이력**이 결함을 은폐해 왔다(fresh 경로 미검증).
+개발 클러스터는 <nvidia-node> 의 **host 드라이버 설치 이력**이 결함을 은폐해 왔다(fresh 경로 미검증).
 
 근본 원인 (실측):
 
@@ -22,7 +22,7 @@
   컨테이너 임시 fs 에 고아로 남고, **host userspace(libnvidia-*, nvidia-smi) 는 노출되지 않는다(⑤)**.
 - 또한 idempotent-skip 후 `/dev/nvidia*` 디바이스 노드 생성 주체가 없어 toolkit CDI generate·
   GPU 파드가 데드락한다(④).
-- worker1 의 host 설치 이력이 v17.2 의 idempotent-skip 으로 이 경로를 항상 단락시켜 불일치를 은폐.
+- <nvidia-node> 의 host 설치 이력이 v17.2 의 idempotent-skip 으로 이 경로를 항상 단락시켜 불일치를 은폐.
 
 ## 결정
 

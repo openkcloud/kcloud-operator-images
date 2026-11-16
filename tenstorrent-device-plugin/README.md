@@ -67,7 +67,7 @@ make vet
 
 ## 이미지 정보
 
-- **Registry**: `ghcr.io/openkcloud` (기본값. `REGISTRY` 로 사내 미러를 지정한다)
+- **Registry**: `ghcr.io/openkcloud` (기본값. `REGISTRY` 로 자체 미러를 지정한다)
 - **Image**: `ghcr.io/openkcloud/kcloud-tt-device-plugin:v0.1.0`
 - **Base**: `scratch` (multi-stage build)
 - **Size**: < 20 MB

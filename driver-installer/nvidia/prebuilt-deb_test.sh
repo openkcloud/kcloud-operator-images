@@ -11,7 +11,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
-# 가짜 prebuilt 트리: k8s-worker1 커널 하나만 동봉된 상태를 흉내낸다.
+# 가짜 prebuilt 트리: <nvidia-node> 커널 하나만 동봉된 상태를 흉내낸다.
 mkdir -p "$tmp/opt/nvidia-deb/5.15.0-171-generic"
 : > "$tmp/opt/nvidia-deb/5.15.0-171-generic/linux-modules-nvidia-580-5.15.0-171-generic_5.15.0-171.181_amd64.deb"
 

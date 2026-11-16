@@ -3,7 +3,7 @@
 # 상세: baked-source(air-gap) + job모드 이미지. REGISTRY 가 가리키는 레지스트리로 push.
 #       버전별 태그 <kmd>-vN (images.yaml 규약, 예: 2.11.0-v1).
 #       build-precompiled 는 커널 하나의 prebuilt .ko 를 함께 굽는다(태그 <kmd>-k<kernel>-vN).
-#       사내 미러는 REGISTRY=<사내 미러>/kcloud make ... 로 덮어쓴다.
+#       자체 미러는 REGISTRY=<자체 미러>/kcloud make ... 로 덮어쓴다.
 # 생성일: 2026-04-22 | 수정일: 2026-10-11
 # ============================================================
 
