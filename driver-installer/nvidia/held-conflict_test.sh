@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 # ============================================================
 # held-conflict_test.sh: hold 된 호스트 패키지가 설치를 막는 경우를 판정·보고하는지 시험
-# 상세: entrypoint.sh 함수만 source 하고 ns·apt_wait 를 가짜로 둔다. apt 출력 고정 데이터는
-#       Ubuntu 22.04 컨테이너에서 실측한 원문(A 간접 의존, B 목록에 hold 패키지, N hold 없음)이다.
-#       가드 뒤에 정의된 install_and_activate_driver 본문과 실행부의 설치 블록은 sed 로 뽑아 실제
-#       코드를 실행한다 — 글자 확인만으로는 반환값·종료 코드를 바꾸는 변경을 잡지 못한다.
-#       사례 M 은 hold 지목 순서(의존 대상 쪽 먼저, 비면 요구하는 쪽)와 Breaks·Conflicts 거절 줄, 의존 대상
-#       파서의 분기별 고정 출력, 요구 쪽 지목의 아키텍처 접미사 제거, 두 절이 함께 있는 출력을 본다. 사례 14 는
-#       재부팅 유예가 가능한 호스트에서도 hold 충돌이 유예보다 먼저 종료 코드 3 으로 끝나는지 본다.
+# 상세: entrypoint.sh 함수만 source 하고 ns·apt_wait 를 가짜로 둔다. apt 출력 고정 데이터는 Ubuntu 22.04
+#       컨테이너에서 실측한 원문(A 간접 의존, B 목록에 hold 패키지, N hold 없음)이다. 가드 뒤에 정의된
+#       install_and_activate_driver 본문과 실행부의 설치 블록은 sed 로 뽑아 실제 코드를 실행한다 — 글자 확인만으로는
+#       반환값·종료 코드를 바꾸는 변경을 잡지 못한다. 사례별 범위는 각 사례 머리 주석(M·14 포함)에 있다.
 # 생성일: 2026-10-27 | 수정일: 2026-11-16
 # ============================================================
 # shellcheck disable=SC2034
@@ -210,6 +207,7 @@ grep -q 'see the apt and DKMS output above' "$err" || { echo "FAIL case13c: 일�
 # (14) 실행부 호출 지점: 실제 "DRIVER SELECTION & INSTALL" 블록을 뽑아 운영과 같이 set -Eeuo pipefail 로 돌린다.
 #      후보 루프·재부팅 유예 판정·종료 함수는 실제 코드이고 가드 뒤 함수 둘만 가짜다. 후보가 3 이면 종료 코드 3 과
 #      hold 사유, 1 이면 종료 코드 1, 0 이면 종료하지 않는다.
+
 #      두 번째 인자 defer 는 재부팅 유예가 가능한 호스트(타겟 패키지 설치됨·디스크 모듈 580·로드된 모듈 없음)다. 가짜 ns 가 그
 #      상태를 답하고 collect_reboot_guard_state·apply_reboot_defer 는 실제 본문이 읽는다. 유예가 가능한 호스트에서도 hold 충돌은
 #      유예 없이 종료 코드 3 이고(후보 루프가 세운 PIN_FAILED 가 유예를 막는다), hold 가 아닌 실패는 유예(종료 0·needs-reboot

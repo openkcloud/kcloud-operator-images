@@ -1,7 +1,7 @@
 // ============================================================
 // hwmon_test.go: hwmon 텔레메트리 수집기 단위 테스트
 // 상세: 4벤더(RNGD/Warboy/ATOM/Blackhole) 실측 sysfs 레이아웃을 합성 트리로 재현해 PCI 조인·
-// 단위 정규화·라벨 해석·무관 hwmon 배제를 검증한다. 값·파일명은 실측(.113/.92/.111/.94) 그대로 쓴다.
+// 단위 정규화·라벨 해석·무관 hwmon 배제를 검증한다. 값·파일명은 실측값 그대로 쓴다.
 // 생성일: 2026-07-29 | 수정일: 2026-10-11
 // ============================================================
 package main
@@ -60,7 +60,7 @@ func buildFixture(t *testing.T) string {
 	root := t.TempDir()
 	dev := filepath.Join(root, "devices")
 
-	// RNGD (.113): vendor 0x1ed2 / device 0x0001, hwmon "rngd0", 전력은 power1_average.
+	// RNGD: vendor 0x1ed2 / device 0x0001, hwmon "rngd0", 전력은 power1_average.
 	addPciDevice(t, root, "0000:27:00.0", "0x1ed2", "0x0001", "0x120000")
 	rngdPath := filepath.Join(dev, "pci0000:26/0000:26:01.0/0000:27:00.0")
 	addHwmon(t, root, "hwmon4", rngdPath, map[string]string{
@@ -73,7 +73,7 @@ func buildFixture(t *testing.T) string {
 		"power1_label":   "RMS_TOTAL",
 	})
 
-	// Warboy (.92): vendor 0x1ed2 / device 0x0000, hwmon "npu0", 전력 센서 없음.
+	// Warboy: vendor 0x1ed2 / device 0x0000, hwmon "npu0", 전력 센서 없음.
 	addPciDevice(t, root, "0000:af:00.0", "0x1ed2", "0x0000", "0x120000")
 	warboyPath := filepath.Join(dev, "pci0000:ae/0000:ae:00.0/0000:af:00.0")
 	addHwmon(t, root, "hwmon1", warboyPath, map[string]string{
@@ -82,7 +82,7 @@ func buildFixture(t *testing.T) string {
 		"temp1_label": "Peak",
 	})
 
-	// ATOM (.111): 비표준 파일명(temp_input / card_power_input), device 링크 말단이 PCI 가 아님.
+	// ATOM: 비표준 파일명(temp_input / card_power_input), device 링크 말단이 PCI 가 아님.
 	addPciDevice(t, root, "0000:c3:00.0", "0x1eff", "0x1120", "0x120000")
 	atomPath := filepath.Join(dev, "pci0000:c0/0000:c0:01.1/0000:c3:00.0/rebellions/rbln0")
 	addHwmon(t, root, "hwmon0", atomPath, map[string]string{
@@ -92,7 +92,7 @@ func buildFixture(t *testing.T) string {
 		"card_p_state":     "14",
 	})
 
-	// Tenstorrent Blackhole (.94): 온도·전력 외 curr/fan/in 센서는 무시돼야 한다.
+	// Tenstorrent Blackhole: 온도·전력 외 curr/fan/in 센서는 무시돼야 한다.
 	addPciDevice(t, root, "0000:b1:00.0", "0x1e52", "0xb140", "0x120000")
 	ttPath := filepath.Join(dev, "pci0000:b0/0000:b0:00.0/0000:b1:00.0")
 	addHwmon(t, root, "hwmon7", ttPath, map[string]string{

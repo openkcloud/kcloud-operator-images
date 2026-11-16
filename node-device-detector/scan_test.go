@@ -3,7 +3,7 @@
 // 상세: migLgip() 의 nvidia-smi 부재 경로(CI) 검증 + parseMigObservation 의 fail-closed
 // 판정 단위 테스트 + Rebellions 드라이버 버전 탐지(커널 모듈 우선·rebellions-dkms 패키지).
 // 픽스처는 worker1 A30(nvidia-smi 580 계열)·worker4 ATOM+(rebellions-dkms 3.0.0) 실측 형식을 쓴다.
-// 생성일: 2026-07-23 | 수정일: 2026-10-27
+// 생성일: 2026-07-23 | 수정일: 2026-11-16
 // ============================================================
 package main
 
@@ -252,7 +252,7 @@ func TestHostCommandFallsBackWithoutLoader(t *testing.T) {
 // 여기서 나온 값이 업그레이드 상태기계의 "현재 버전" 이 되므로, 틀리면 멀쩡한 노드가
 // 교체 대상으로 판정돼 cordon 된다. 실제로 두 차례 그렇게 뚫렸다:
 //   - 580.142(2-component) 를 못 잡아 GCC 줄로 흘렀고
-//   - open kernel module 의 "for x86_64" 토큰을 못 넘어 다시 GCC 줄로 흘렀다(.93 A30 595.84 실측)
+//   - open kernel module 의 "for x86_64" 토큰을 못 넘어 다시 GCC 줄로 흘렀다(A30 595.84 실측)
 func TestParseNvrmVersion(t *testing.T) {
 	// GCC 배너는 두 회귀 모두의 오답 출처라 모든 입력에 그대로 붙여 둔다.
 	const gcc = "  GCC version:  gcc version 11.4.0 (Ubuntu 11.4.0-1ubuntu1~22.04.3) "
@@ -263,7 +263,7 @@ func TestParseNvrmVersion(t *testing.T) {
 		want string
 	}{
 		{
-			// .93 A30 실측. 회귀 재발 지점.
+			// A30 실측. 회귀 재발 지점.
 			name: "open kernel module",
 			in: "NVRM version: NVIDIA UNIX Open Kernel Module for x86_64  595.84  " +
 				"Release Build  (dvs-builder@U22-I3-AM25-26-2)  Wed Jun 10 21:06:37 UTC 2026" + gcc,
@@ -410,8 +410,8 @@ const (
 		"Package: rbln-sdk\nVersion: 0.10.3\nStatus: install ok installed\n\n"
 )
 
-// worker4(ATOM+ 2장) 실측: /sys/module/rebellions/version 과 rebellions-dkms 패키지가 모두 3.0.0 인데
-// 패키지 이름 "rebellions" 만 찾던 코드는 빈 버전을 보고했다. 모듈 버전이 패키지 버전보다 우선한다.
+// ATOM+ 2장 노드 실측: /sys/module/rebellions/version 과 rebellions-dkms 패키지가 모두 3.0.0 인데
+// 패키지 이름 "rebellions" 만 찾으면 빈 버전이 나온다. 모듈 버전이 패키지 버전보다 우선한다.
 func TestRblnShortVersionPrefersKernelModule(t *testing.T) {
 	fakeSysModule(t)
 	writeHostFile(t, filepath.Join(hostSysModule, "rebellions", "version"), "3.0.0\n")

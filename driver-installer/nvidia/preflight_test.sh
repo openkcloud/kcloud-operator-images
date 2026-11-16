@@ -1,19 +1,10 @@
 #!/usr/bin/env bash
 # ============================================================
 # preflight_test.sh: 설치 전 점검(run_preflight·preflight.sh)이 hold 충돌만 막고 호스트를 바꾸지 않는지 시험
-# 상세: entrypoint.sh 함수만 source 하고 ns·apt_wait·nvidia_gpu_bindings 를 가짜로 둔다. 모든 ns
-#       호출을 기록해 허용 목록(커널·hold 조회, 헤더·모듈 디렉터리 확인, 로드된 모듈·설치된 드라이버
-#       패키지 조회, 목록 갱신, 모의 설치) 밖의 호스트 명령이 한 번도 없는지 마지막에 단정한다. 사례 B 는
-#       드라이버 세트가 통과한 뒤 DKMS 빌드용 헤더·빌드 도구 모의 설치를 본다 — hold 에 막히면 3, hold 와
-#       무관하게 실패하거나 이미 설치된 도구의 업그레이드만 막히면 통과. 사례 H 는 VERSION_SOURCE=Host 채택 시
-#       점검 생략과 설치 경로와의 일치, 사례 L 은 점검 로그(잠금 대기 실패 사유, 정책 버전 부재는 판정 불가 경고
-#       한 줄이고 PIN_LOOKUP_QUIET 는 run_preflight 밖으로 새지 않는다), 사례 D 는 기존 드라이버 감지(로드된
-#       모듈 먼저, 없으면 설치된 패키지, 모듈 파일은 있으나 버전을 못 읽으면 표지와 설치 경로의 경고)를 본다.
-#       사례 9a 는 호스트 불변 검사의 판정기를 대조 입력으로 시험하고(&&·;·||·|·$( 로 이은 변경 명령 포함), 사례
-#       10b 는 가짜 nsenter 로 실제 entrypoint.sh 와 preflight.sh 를 프로세스로 실행해, 호스트 명령이 실패해도
-#       종료 코드가 hold 충돌(3)로 새지 않고 1 인지 본다 — ns 가 nsenter 를 절대경로로 부르면 가짜가 가로채지 못해
-#       실행 전에 정의를 먼저 확인한다.
-# 생성일: 2026-10-27 | 수정일: 2026-10-28
+# 상세: entrypoint.sh 함수만 source 하고 ns·apt_wait·nvidia_gpu_bindings 를 가짜로 둔다. 모든 ns 호출을 기록해
+#       허용 목록 밖의 호스트 명령이 한 번도 없는지 마지막에 단정한다(사례 9). 사례별 범위는 각 사례 머리 주석에 있다:
+#       B 헤더·빌드 도구 모의 설치, H VERSION_SOURCE=Host 채택, L 점검 로그, D 기존 드라이버 감지, 10b 실제 프로세스 실행.
+# 생성일: 2026-10-27 | 수정일: 2026-11-16
 # ============================================================
 # shellcheck disable=SC2034
 # 파일 전체에 적용 — 전역 대입(DRIVER_VERSION·PREBUILT_ROOT 등)은 source 한 함수가 읽는다.
@@ -281,9 +272,8 @@ detect_existing_driver_version
 #     없는 변형(apt-get -y --allow-downgrades install …)이 빠져나가므로 허용하는 쪽을 닫는다. 허용: 커널 조회,
 #     목록 갱신, 모의 설치(옵션은 --allow-downgrades·--no-install-recommends·--no-upgrade 만 — hold 를 무시하는
 #     옵션이 붙으면 점검이 무의미하다), hold 목록·dpkg·apt-cache 조회, 커널 헤더·모듈 디렉터리 존재 확인, 로드된 모듈
-#     버전 조회(test -f·cat), 설치된 드라이버 패키지 조회(dpkg-query 뒤의 grep·awk·head 필터). 기록 한 줄에
-#     &&·||·;·| 나 명령 치환으로 이어 붙인 명령은 먼저 단위로 나눠 각각 판정한다 — 허용 명령에 붙은 변경 명령이
-#     허용 패턴에 묻히지 않게 하려는 것이다.
+#     버전 조회(test -f·cat), 설치된 드라이버 패키지 조회(dpkg-query 뒤의 grep·awk·head 필터). 기록 한 줄에 &&·||·;·|
+#     나 명령 치환으로 이어 붙인 명령은 먼저 단위로 나눠 각각 판정한다 — 허용 명령에 붙은 변경 명령이 묻히지 않게 한다.
 host_cmd_violations() {   # $1: 기록 파일. 허용 목록 밖의 명령 단위를 한 줄에 하나 낸다.
   local unit re ok arg='[A-Za-z0-9._+:=~/-]+' pkg='[A-Za-z0-9][A-Za-z0-9._+:=~/-]*' glob="'[A-Za-z0-9._+:=~/*-]+'"
   local allowed=(
@@ -309,7 +299,7 @@ host_cmd_violations() {   # $1: 기록 파일. 허용 목록 밖의 명령 단�
     [[ "$ok" -eq 1 ]] || printf '%s\n' "$unit"
   done < <(sed -E 's/(\$\(|[;|&`()])/\n/g' "$1")
 }
-# 판정 자체의 시험: 허용 형태는 통과하고, 변경 명령은 단독이든 허용 명령에 이어 붙었든 걸린다. 이어 붙이는 구분자마다
+# (9a) 판정 자체의 시험: 허용 형태는 통과하고, 변경 명령은 단독이든 허용 명령에 이어 붙었든 걸린다. 이어 붙이는 구분자마다
 # (&&·;·||·|·$( ) 변경 명령을 한 줄씩 둔다 — 판정기의 분리 식에서 구분자 하나가 빠지면 그 줄이 한 덩어리로 남아 기대 목록과 어긋난다.
 cat > "$tmp/probe" <<'EOF'
 apt-get update -y
@@ -355,6 +345,7 @@ rc=0; ENTRYPOINT_PATH="$tmp/fake-entrypoint.sh" bash "$here/preflight.sh" || rc=
 #       코드가 된다. 그 값이 3 이면 operator 는 hold 충돌로 읽어 설치를 막는다. 항상 3 으로 실패하는 가짜 nsenter 를
 #       PATH 맨 앞에 두면 ns 가 호스트에 닿지 않아 GPU·네트워크·권한과 무관하게 같은 경로(apt_wait 실패)를 탄다.
 #       SKIP_ON_PASSTHROUGH=false 로 GPU 조회를 건너뛰고, 종료 메시지는 임시 파일에 받는다. 기대: 종료 코드 1 과 사유.
+
 #       임시 디렉터리가 noexec 이면 가짜를 실행할 수 없어 PATH 탐색이 실제 nsenter 로 넘어가므로, 가짜가 먼저
 #       잡히는지 확인하고 아니면 실행하지 않는다.
 #       가짜는 ns 가 PATH 에서 찾는 bare nsenter 일 때만 가로챈다. entrypoint.sh 의 ns 가 nsenter 를 절대경로로 부르도록 바뀌면

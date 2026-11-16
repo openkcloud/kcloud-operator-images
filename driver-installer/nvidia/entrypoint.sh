@@ -4,7 +4,7 @@
 # 상세: Host namespace(nsenter)에서 GPU 드라이버를 설치하고, MANAGE_CONTAINER_TOOLKIT=true 일
 #       때만 nvidia-ctk·containerd/docker 런타임도 구성한다. 사전 컴파일 모듈이 동봉돼 있으면
 #       정합성을 fail-closed 로 확인한 뒤 DKMS 대신 그 모듈을 host 에 설치한다.
-# 생성일: 2026-04-17 | 수정일: 2026-10-28
+# 생성일: 2026-04-17 | 수정일: 2026-11-16
 # ============================================================
 set -Eeuo pipefail
 [[ "${DEBUG:-0}" == "1" ]] && set -x
@@ -220,22 +220,22 @@ nvidia_has_installable_gpu() {
 }
 
 # ============================================================================ #
-# 정책 버전 고정과 후보 설치 루프 (host apt 경로) — 발행 이미지의 실제 설치 경로. 아래
-#   함수는 설치 블록(install_from_candidates 와 "모든 후보 실패" 분기, install_and_activate_driver)
-#   이 부르지만 단위 시험이 실제 본문을 source 할 수 있어야 하므로 ENTRYPOINT_LIB_ONLY 가드
-#   앞에 둔다. install_and_activate_driver 는 가드 뒤에 정의되므로 lib-only 로 source 한
-#   시험은 stub 으로 둬야 한다(apt_wait 는 가드 앞에 있지만 host 를 부르므로 시험은 stub 으로
-#   덮는다).
+# 정책 버전 고정과 후보 설치 루프(host apt 경로) — 발행 이미지의 실제 설치 경로. 아래 함수는
+#   설치 블록(install_from_candidates·"모든 후보 실패" 분기·install_and_activate_driver)이 부르지만
+#   단위 시험이 실제 본문을 source 할 수 있어야 하므로 ENTRYPOINT_LIB_ONLY 가드 앞에 둔다.
+#   install_and_activate_driver 는 가드 뒤에 정의되므로 lib-only 로 source 한 시험은 stub 으로 둔다
+#   (apt_wait 는 가드 앞에 있지만 host 를 부르므로 시험은 stub 으로 덮는다).
 
-# resolve_pinned_pkg_version <pkg>: 이 시점의 DRIVER_VERSION(정책 값, VERSION_SOURCE=Host 로
-#   호스트 값을 채택한 경우는 SKIP_DRIVER_INSTALL=1 이라 이 경로에 오지 않는다)에 맞는 host
-#   apt 패키지 버전을 찾는다. x.y(.z) 꼴일 때만 고정 대상이다(major 만 적은 580 같은 값은
-#   계열 설치, 고정 안 함). `apt-cache madison` 에서 epoch 를 뗀 값이 접두 일치하는 첫 항목을
-#   epoch 포함 원문으로 stdout 에 내고 0, 없으면 후보를 stderr 에 적고 1(대체 없음). 고정
-#   대상이 아니면 빈 출력·0(종전 계열 설치). 호출부가 PIN_LOOKUP_QUIET 를 켜면(설치 전 점검: PPA 추가
-#   전이라 부재가 정상) 아무것도 적지 않고 1 만 돌려준다 — 부재를 어떻게 알릴지는 호출부가 정한다(run_preflight 는
-#   판정 불가 경고 한 줄을 로그와 종료 메시지에 같은 문장으로 남기므로, 여기서도 적으면 같은 사실이 두 번 남는다).
-#   호출부가 $(...) 로 값을 받으므로 stdout 에는 값 말고 아무것도 쓰지 않는다.
+# resolve_pinned_pkg_version <pkg>: 이 시점의 DRIVER_VERSION(정책 값)에 맞는 host apt 패키지 버전을 찾는다
+#   (VERSION_SOURCE=Host 로 호스트 값을 채택한 경우는 SKIP_DRIVER_INSTALL=1 이라 이 경로에 오지 않는다).
+#   x.y(.z) 꼴일 때만 고정 대상이다(major 만 적은 580 같은 값은 계열 설치, 고정 안 함). `apt-cache madison`
+#   에서 epoch 를 뗀 값이 접두 일치하는 첫 항목을 epoch 포함 원문으로 stdout 에 내고 0, 없으면 후보를 stderr 에
+#   적고 1(대체 없음). 고정 대상이 아니면 빈 출력·0(종전 계열 설치). 호출부가 $(...) 로 값을 받으므로 stdout 에는
+#   값 말고 아무것도 쓰지 않는다.
+
+# PIN_LOOKUP_QUIET 를 켠 호출(설치 전 점검: PPA 추가 전이라 부재가 정상)에서는 아무것도 적지 않고 1 만 돌려준다 —
+#   부재를 어떻게 알릴지는 호출부가 정한다(run_preflight 는 판정 불가 경고 한 줄을 로그와 종료 메시지에 같은 문장으로
+#   남기므로, 여기서도 적으면 같은 사실이 두 번 남는다).
 resolve_pinned_pkg_version() {
   local pkg="$1" want="${DRIVER_VERSION:-}"
   if [[ ! "${want}" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
@@ -477,11 +477,12 @@ collect_reboot_guard_state() {
 # reboot_defer_applicable: 재부팅 유예 가드(cross-major 전이와 같은 계열 patch 교체). PIN_FAILED 를
 #   첫 조건으로 두는 이유 — PIN_FAILED=1 은 정책 버전 고정 실패(후보가 2)와 hold 충돌(후보가 3)에서 선다.
 #   고정 실패 뒤에는 정책이 아닌 버전이 디스크에 있을 수 있고, hold 충돌을 유예하면 정상 종료(재부팅 위임)로
-#   가려지므로 둘 다 유예하지 않고 exit_install_failed 로 보낸다(hold 충돌은 종료 코드 3). 정책이 x.y.z 이면
-#   디스크 모듈이 그 patch 와 같고 로드된 모듈이 그 patch 가 아닐 때 참이다(같은 계열 patch 교체 포함). major 만
-#   적은 정책은 로드된 major 가 다를 때 참이다. 부팅 뒤 검증기(internal/validator/validator.go:117)는 로드된
-#   모듈 버전만 보고 dpkg 메타패키지는 읽지 않는다. 사전 컴파일은 메타패키지를 설치하지 않아 그 값이 옛 apt
-#   이력이므로 조건에 넣지 않는다.
+#   가려지므로 둘 다 유예하지 않고 exit_install_failed 로 보낸다(hold 충돌은 종료 코드 3).
+
+# 정책이 x.y.z 이면 디스크 모듈이 그 patch 와 같고 로드된 모듈이 그 patch 가 아닐 때 참이다(같은 계열 patch
+#   교체 포함). major 만 적은 정책은 로드된 major 가 다를 때 참이다. 부팅 뒤 검증기(operator 의
+#   internal/validator/validator.go)는 로드된 모듈 버전만 보고 dpkg 메타패키지는 읽지 않는다. 사전 컴파일은
+#   메타패키지를 설치하지 않아 그 값이 옛 apt 이력이므로 조건에 넣지 않는다.
 reboot_defer_applicable() {
   [[ "${PIN_FAILED:-0}" != "1" \
         && -n "${EXPECTED_MAJOR}" && "${TARGET_PKG_OK}" -ge 1 \
@@ -506,13 +507,11 @@ loaded_needs_reboot() {
   [[ "${loaded%%.*}" != "${want%%.*}" ]]
 }
 
-# install_from_candidates: DRIVER_CANDIDATES 를 순서대로 시도한다. 결과는 전역에 남긴다 —
-#   INSTALL_SUCCESS=1 설치·활성 성공, PIN_FAILED=1 정책 버전 고정 실패(후보가 2 를 돌려줌)
-#   또는 hold 충돌, HOLD_CONFLICT=1 hold 충돌(후보가 3 을 돌려줌).
-#   rc 2 에서 남은 후보로 대체하지 않는 것이 이 루프가 지키는 규칙이다 — 대체하면 정책이
-#   아닌 버전이 조용히 깔린다. 전역을 쓰는 채로 함수로 감싼 이유는 단위 시험이 그 규칙을
-#   직접 부를 수 있게 하는 것뿐이다. local 로 바꾸면 호출부와 reboot_defer_applicable 이
-#   결과를 보지 못한다.
+# install_from_candidates: DRIVER_CANDIDATES 를 순서대로 시도한다. 결과는 전역에 남긴다 — INSTALL_SUCCESS=1
+#   설치·활성 성공, PIN_FAILED=1 정책 버전 고정 실패(후보가 2 를 돌려줌) 또는 hold 충돌, HOLD_CONFLICT=1
+#   hold 충돌(후보가 3 을 돌려줌). rc 2 에서 남은 후보로 대체하지 않는 것이 이 루프가 지키는 규칙이다 —
+#   대체하면 정책이 아닌 버전이 조용히 깔린다. 전역을 쓰는 채로 함수로 감싼 이유는 단위 시험이 그 규칙을
+#   직접 부를 수 있게 하는 것뿐이다. local 로 바꾸면 호출부와 reboot_defer_applicable 이 결과를 보지 못한다.
 install_from_candidates() {
   INSTALL_SUCCESS=0
   # 고정 실패·hold 충돌 표식 — reboot_defer_applicable 이 읽는다. set -u 때문에 루프 앞에서 초기화한다.
@@ -608,12 +607,11 @@ detect_existing_driver_version() {
 #   채택하고 설치하지 않는다. 설치 경로와 설치 전 점검이 이 판정 하나를 쓴다.
 host_driver_adopted() { [[ "${VERSION_SOURCE:-Policy}" == "Host" && -n "${EXISTING_VER:-}" ]]; }
 
-# run_preflight: 설치 전 점검. 설치가 쓸 apt 인자로 모의 설치(-s -y)를 돌려 hold 된 호스트 패키지가
-#   설치를 막는지 본다. 드라이버 세트가 통과하면 DKMS 빌드에 필요한 커널 헤더·빌드 도구도 설치 경로와 같은
-#   인자(빌드 도구는 --no-upgrade)로 모의 설치한다. VERSION_SOURCE=Host 이고 호스트에 드라이버가 있으면
-#   설치기가 그 버전을 채택하고 설치하지 않으므로 점검하지 않는다. 호스트에는 apt 목록 갱신만 하고 패키지를
-#   설치·제거·hold 하지 않는다.
-#   반환: 0 통과 또는 점검 대상 아님, EXIT_HOLD_CONFLICT hold 충돌, 1 판정 불가(operator 는 설치를
+# run_preflight: 설치 전 점검. 설치가 쓸 apt 인자로 모의 설치(-s -y)를 돌려 hold 된 호스트 패키지가 설치를
+#   막는지 본다. 드라이버 세트가 통과하면 DKMS 빌드에 필요한 커널 헤더·빌드 도구도 설치 경로와 같은 인자(빌드
+#   도구는 --no-upgrade)로 모의 설치한다. VERSION_SOURCE=Host 이고 호스트에 드라이버가 있으면 설치기가 그
+#   버전을 채택하고 설치하지 않으므로 점검하지 않는다. 호스트에는 apt 목록 갱신만 하고 패키지를 설치·제거·hold
+#   하지 않는다. 반환: 0 통과 또는 점검 대상 아님, EXIT_HOLD_CONFLICT hold 충돌, 1 판정 불가(operator 는 설치를
 #   막지 않는다). 사유는 종료 메시지에 남긴다. preflight.sh 가 부른다.
 run_preflight() {
   local major sim msg kpkgs
@@ -1218,12 +1216,11 @@ if [[ "${SKIP_DRIVER_INSTALL:-0}" != "1" ]]; then
 
   if [[ "${INSTALL_SUCCESS}" -ne 1 ]]; then
     # 모듈 교체 지연(cross-major·같은 계열 patch)은 install 실패가 아니다. 구 모듈이 busy(GPU 홀더/refcount)면
-    # rmmod·신 모듈 modprobe 가 실패해 모든 candidate 가 실패로 보이지만, 타겟 패키지는 이미
-    # 설치됐고 신 모듈은 재부팅 후 로드된다. install 실패로 처리하면 needs-reboot 마커가 안 남아
-    # operator 의 RebootRequired→reboot 경로가 발화하지 못한다. TARGET_PKG_OK(타겟 설치 완료)·
-    # DISK_MOD_MAJOR/VER(디스크 모듈이 신 버전으로 빌드됨)·ACTIVE_MAJOR/ACTIVE_NVRM(현재 로드 버전)·
-    # PIN_FAILED(고정 실패·hold 충돌이면 가드 skip) 네 신호가 모두 맞으면 마커를 남기고 정상 종료해 재부팅에 위임한다.
-    # hold 충돌은 PIN_FAILED 로 가드를 건너뛰고 아래 exit_install_failed 가 종료 코드 3 으로 먼저 끝낸다.
+    # rmmod·신 모듈 modprobe 가 실패해 모든 candidate 가 실패로 보이지만, 타겟 패키지는 이미 설치됐고 신 모듈은
+    # 재부팅 후 로드된다. install 실패로 처리하면 needs-reboot 마커가 안 남아 operator 의 RebootRequired→reboot
+    # 경로가 발화하지 못한다. TARGET_PKG_OK(타겟 설치 완료)·DISK_MOD_MAJOR/VER(디스크 모듈이 신 버전으로 빌드됨)·
+    # ACTIVE_MAJOR/ACTIVE_NVRM(현재 로드 버전)·PIN_FAILED(고정 실패·hold 충돌이면 가드 skip) 네 신호가 모두 맞으면
+    # 마커를 남기고 정상 종료해 재부팅에 위임한다. hold 충돌은 PIN_FAILED 로 가드를 건너뛰고 아래에서 종료 코드 3 으로 끝낸다.
     collect_reboot_guard_state
     ACTIVE_NVRM=$(ns "cat /proc/driver/nvidia/version 2>/dev/null" | parse_nvrm_version || echo "")
     ACTIVE_MAJOR="${ACTIVE_NVRM%%.*}"
