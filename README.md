@@ -1,3 +1,5 @@
+<!-- README.md: kcloud-operator-images 저장소 안내 — 이미지 목록, 벤더 산출물 처리, 릴리스, 발행 절차, 로컬 빌드 | 생성일: 2026-09-10 | 수정일: 2026-11-27 -->
+
 # kcloud-operator-images
 
 [kcloud-operator](https://github.com/openkcloud/kcloud-operator) 가 노드에 배포하는 부속 컨테이너 이미지의 빌드 컨텍스트를 모아 둔 저장소입니다. 디렉터리 하나가 이미지 하나에 대응하고, 발행된 이미지는 `ghcr.io/openkcloud/<이미지명>:<태그>` 로 받습니다. operator 의 Helm 차트는 `global.registry` 기본값이 `ghcr.io/openkcloud` 라서 별도 설정 없이 이 저장소가 발행한 이미지를 사용합니다.
@@ -7,14 +9,16 @@
 | 이미지 | 디렉터리 | 역할 | 태그 형태 | 현재 태그 |
 |---|---|---|---|---|
 | `kcloud-host-exec` | `kcloud-host-exec/` | operator 가 호스트에서 명령을 대신 실행할 때 쓰는 hostPID Job 이미지입니다. `alpine` 에 `nsenter` 만 더했습니다. MIG 관측과 적용, 노드 재부팅이 이 이미지를 공유합니다. | `vX.Y.Z` | `v0.1.0` |
-| `kcloud-node-manager` | `node-device-detector/` | 전 노드에서 상시 실행되는 비특권 감지 에이전트입니다. PCI 장치, 드라이버 버전, MIG 상태를 스캔해 `NodeDeviceReport` 리소스에 기록합니다. | `X.Y.Z` | `0.6.21` |
+| `kcloud-node-manager` | `node-device-detector/` | 전 노드에서 상시 실행되는 비특권 감지 에이전트입니다. PCI 장치, 드라이버 버전, MIG 상태를 스캔해 `NodeDeviceReport` 리소스에 기록하고, 장치가 있는 노드에 `kcloud.ai/<벤더>.present` 라벨을 붙입니다. | `X.Y.Z` | `0.6.21` |
 | `nvidia-driver-ds` | `driver-installer/nvidia/` | NVIDIA 드라이버 설치기입니다. 빌드 파일은 `Dockerfile.v17` 입니다. 이미지에 NVIDIA 패키지를 담지 않습니다(설치는 노드 apt). | `vN` | `v9` |
 | `furiosa-driver-ds` | `driver-installer/furiosa/` | Furiosa Warboy 와 RNGD 공용 드라이버 설치기입니다. | `vN` | `v4` |
-| `tenstorrent-driver-ds` | `driver-installer/tenstorrent/` | Tenstorrent tt-kmd 드라이버 설치기입니다. 태그의 앞부분이 내장한 tt-kmd 소스의 버전입니다. | `<kmd 버전>-vN` | `2.8.0-v1` |
+| `tenstorrent-driver-ds` | `driver-installer/tenstorrent/` | Tenstorrent tt-kmd 드라이버 설치기입니다. 태그의 앞부분이 내장한 tt-kmd 소스의 버전입니다. | `<kmd 버전>-vN` | `2.11.0-v1` |
 | `kcloud-tt-device-plugin` | `tenstorrent-device-plugin/` | Tenstorrent Blackhole 용 Kubernetes device plugin 입니다. `tenstorrent.com/blackhole` 리소스를 광고합니다. | `vX.Y.Z` | `v0.1.0` |
 | `furiosa-exporter` | `furiosa-exporter/` | Furiosa NPU 지표를 Prometheus 형식으로 내보내는 exporter 입니다. 차트 기본값은 비활성입니다. | `X.Y.Z` | `0.4.0` |
+| `generic-device-plugin` | `generic-device-plugin/` | `AcceleratorDescriptor` 로 기술한 장치를 device plugin 으로 노출하는 범용 backend 입니다. operator 가 descriptor 를 적용할 때 배포합니다. | `vN` | `v3` |
+| `generic-dra-driver` | `generic-dra-driver/` | `AcceleratorDescriptor` 로 기술한 장치를 DRA 로 노출하는 범용 backend 입니다. operator 가 descriptor 를 적용할 때 배포합니다. | `vN` | `v2` |
 
-태그 형태는 operator 차트의 `values.yaml` 이 참조하는 값을 따릅니다. 이미지마다 형태가 달라 저장소 전체를 아우르는 버전 번호는 없습니다.
+태그 형태는 operator 차트의 `values.yaml` 이 참조하는 값을 따르고, 현재 태그는 kcloud-operator 0.8.4 세트가 쓰는 값입니다. 이미지마다 태그가 따로 있으며, 저장소 Release 번호는 [릴리스](#릴리스) 절에서 설명하는 이미지 태그 묶음입니다.
 
 ## 벤더 산출물 처리
 
@@ -23,8 +27,13 @@
 - 드라이버 설치기 3종은 드라이버 바이너리를 포함하지 않습니다. NVIDIA 설치기는 실행 시점에 Ubuntu 패키지 저장소에서, Furiosa 설치기는 벤더 apt 저장소에서 드라이버 패키지를 받아 호스트에 설치합니다.
 - Tenstorrent 설치기는 빌드 시점에 upstream 저장소의 태그에서 tt-kmd 소스를 받아 담고, 실행 시점에 DKMS 로 호스트 커널에 맞춰 빌드합니다.
 - `furiosa-exporter` 는 벤더 라이브러리 `libfuriosa_smi.so` 를 빌드 단계에서만 링크하고 이미지에는 담지 않습니다. 실행 시점에는 드라이버 설치기가 호스트에 설치한 같은 파일을 hostPath 로 읽습니다.
+- NVIDIA·Furiosa RNGD 의 커널별 사전 컴파일 이미지는 벤더 패키지나 벤더 소스로 빌드한 커널 모듈을 담으므로 공개 발행하지 않습니다.
 
 device plugin 처럼 벤더가 공개 이미지를 제공하는 구성 요소는 이 저장소에서 빌드하지 않고 operator 차트가 벤더 이미지를 직접 참조합니다.
+
+## 릴리스
+
+저장소 [Release](https://github.com/openkcloud/kcloud-operator-images/releases) 는 kcloud-operator 세트가 쓰는 이미지 태그를 묶어 기록합니다. 첫 Release `v0.2.0` 은 kcloud-operator 0.8.4·0.6.3-k8s1.28 세트의 태그를 담습니다. 이미지는 Release 와 별개로 아래 발행 절차의 이미지별 태그로 발행하므로, `v0.2.0` 같은 Release 태그는 이미지를 발행하지 않습니다.
 
 ## 발행 절차
 
@@ -85,6 +94,8 @@ docker build -t furiosa-driver-ds:dev --build-arg BUILD_VARIANT=dev driver-insta
 docker build -t tenstorrent-driver-ds:dev driver-installer/tenstorrent
 docker build -t kcloud-tt-device-plugin:dev tenstorrent-device-plugin
 docker build -t furiosa-exporter:dev furiosa-exporter
+docker build -t generic-device-plugin:dev generic-device-plugin
+docker build -t generic-dra-driver:dev generic-dra-driver
 ```
 
 `furiosa-driver-ds` 는 이미지가 자기 태그를 알아야 설치 마커를 판정하므로 `BUILD_VARIANT` 를 발행 태그와 같은 값으로 줍니다. `furiosa-exporter` 는 빌드 단계에서 벤더 apt 저장소에 접근하므로 빌드 환경에 인터넷이 필요합니다.
